@@ -39,12 +39,12 @@ const (
 
 var clientset *kubernetes.Clientset
 var config *rest.Config
-var ghbranchURLRe *regexp.Regexp
+var ghBranchURLRe *regexp.Regexp
 
 func init() {
 	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
 
-	ghbranchURLRe = regexp.MustCompile("https://github.com/([^/]+)/([^/]+)/tree/([^/]+)")
+	ghBranchURLRe = regexp.MustCompile("https://github.com/([^/]+)/([^/]+)/tree/([^/]+)")
 
 	// setup kubernetes client
 	var err error
@@ -154,7 +154,7 @@ func terminate(ns *corev1.Namespace) error {
 // getBranchURLStatus expects URL like https://github.com/USER/REPO/tree/BRANCH
 // it queries Github API and returns status code of HTTP response
 func getBranchURLStatus(branchURL string) (status int, err error) {
-	parts := ghbranchURLRe.FindStringSubmatch(branchURL)
+	parts := ghBranchURLRe.FindStringSubmatch(branchURL)
 	if parts == nil || len(parts) < 4 {
 		return 0, fmt.Errorf("branchURL doesn't match regexp: %v", parts)
 	}
