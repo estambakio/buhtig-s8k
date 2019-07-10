@@ -5,5 +5,5 @@ metadata:
   labels:
     opuscapita.com/buhtig-s8k: "true"
   annotations:
-    opuscapita.com/github-source-url: https://github.com/OpusCapita/eproc-line-deployment/tree/master
+    opuscapita.com/github-source-url: https://github.com/OpusCapita/eproc-line-deployment/tree/master324
     opuscapita.com/helm-release: "dev-egor-test"
