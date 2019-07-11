@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"regexp"
 	"sync"
 	"time"
+
+	"golang.org/x/oauth2"
 
 	"k8s.io/client-go/kubernetes"
 
@@ -17,7 +19,6 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	helm "github.com/OpusCapita/buhtig-s8k/pkg/helm"
-
 	konnect "github.com/OpusCapita/buhtig-s8k/pkg/konnect"
 )
 
@@ -27,7 +28,7 @@ const (
 	githubURLAnnotationName   = "opuscapita.com/github-source-url"
 	helmReleaseAnnotationName = "opuscapita.com/helm-release"
 
-	ghUserEnv  = "GH_USER"
+	// ghUserEnv  = "GH_USER"
 	ghTokenEnv = "GH_TOKEN"
 )
 
@@ -53,7 +54,7 @@ func init() {
 	}
 
 	// assert if required env variables are defined
-	assertEnv(ghUserEnv, ghTokenEnv)
+	assertEnv(ghTokenEnv)
 }
 
 func main() {
@@ -158,24 +159,20 @@ func getBranchURLStatus(branchURL string) (status int, err error) {
 		return 0, fmt.Errorf("branchURL doesn't match regexp: %v", parts)
 	}
 
+	// get auth token from env variable
+	tokenSource := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: os.Getenv(ghTokenEnv)},
+	)
+	httpClient := oauth2.NewClient(context.Background(), tokenSource)
+
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/branches/%s", parts[1], parts[2], parts[3])
 
-	log.Info(fmt.Sprintf("Going to request %s", apiURL))
-	req, err := http.NewRequest("GET", apiURL, nil)
+	resp, err := httpClient.Get(apiURL)
+	defer resp.Body.Close()
+
 	if err != nil {
 		return 0, err
 	}
 
-	// get Github credentials from environment and add them to request
-	// credentials are required for querying private repositories
-	// and give higher rate limits
-	req.SetBasicAuth(os.Getenv(ghUserEnv), os.Getenv(ghTokenEnv))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	resp.Body.Close()
 	return resp.StatusCode, nil
 }

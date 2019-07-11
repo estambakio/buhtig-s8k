@@ -3,5 +3,4 @@
 namespace: ""
 image: ""
 github:
-  user: ""
   token: ""

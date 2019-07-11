@@ -21,16 +21,15 @@ namespace=$( $script_dir/../bin/generate-k8s-resource-name.sh "dev-${github_repo
 docker_repository=$( $script_dir/../docker/bin/get-docker-repository.sh )
 docker_tag=$( $script_dir/../docker/bin/get-docker-tag.sh )
 
-github_user=$( vault kv get -field=value minsk-core-kv/machineuser/github/username )
 github_token=$( vault kv get -field=value minsk-core-kv/machineuser/github/token )
 
 # deploy
 
-. $script_dir/../bin/assert-vars.sh namespace docker_repository docker_tag github_user github_token
+. $script_dir/../bin/assert-vars.sh namespace docker_repository docker_tag github_token
 
 ytt \
   -v namespace="${namespace}" \
   -v image="${docker_repository}:${docker_tag}" \
-  -v github.user="${github_user}" \
-  -v github.token="${github_token}" -f ${script_dir}/../deployment | \
+  -v github.token="${github_token}" \
+  -f ${script_dir} | \
   kubectl apply -f -
