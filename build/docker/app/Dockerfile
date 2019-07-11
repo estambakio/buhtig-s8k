@@ -2,7 +2,7 @@ FROM golang:1.12 as app
 
 WORKDIR /app
 COPY / ./
-RUN GOOS=linux GOARCH=amd64 go build -o app .
+RUN make compile
 
 FROM alpine
 
@@ -21,6 +21,6 @@ LABEL org.opencontainers.image.created="${CREATED}" \
 RUN apk update && apk add ca-certificates && rm -rf /var/cache/apk/*
 
 WORKDIR /app
-COPY --from=app /app/app ./
+COPY --from=app /app/dist/app ./
 
 ENTRYPOINT ["./app"]

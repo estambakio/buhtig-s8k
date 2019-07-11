@@ -5,15 +5,19 @@ docker-login: ## Login to Dockerhub
 	./build/docker/bin/docker-login.sh
 
 .PHONY: build-ci-image
-build-ci-image: docker-login ## Build CI Docker image
+build-ci-image: ## Build CI Docker image
 	./build/docker/ci/build.sh
 
 .PHONY: publish-ci-image
 publish-ci-image: docker-login ## Publish CI Docker image
 	./build/docker/ci/push.sh
 
+.PHONY: compile
+compile: ## Compile Go binary
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./dist/app ./cmd
+
 .PHONY: build-app-image
-build-app-image: docker-login ## Build App Docker image
+build-app-image: ## Build App Docker image
 	./build/docker/app/build.sh
 
 .PHONY: publish-app-image
