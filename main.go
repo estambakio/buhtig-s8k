@@ -1,30 +1,24 @@
 package main
 
 import (
-	"encoding/json"
-	"flag"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
-	"path/filepath"
-
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/util/homedir"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 
 	log "github.com/sirupsen/logrus"
 
-	helm "github.com/OpusCapita/buhtig-s8k/helm"
+	helm "github.com/OpusCapita/buhtig-s8k/pkg/helm"
+
+	konnect "github.com/OpusCapita/buhtig-s8k/pkg/konnect"
 )
 
 const (
@@ -48,7 +42,12 @@ func init() {
 
 	// setup kubernetes client
 	var err error
-	clientset, config, err = k8sConnect()
+	config, err = konnect.NewConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	clientset, err = konnect.NewClientset(config)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -159,19 +158,17 @@ func getBranchURLStatus(branchURL string) (status int, err error) {
 		return 0, fmt.Errorf("branchURL doesn't match regexp: %v", parts)
 	}
 
-	apiURL := &url.URL{
-		Scheme: "https",
-		Host:   "api.github.com",
-		Path:   fmt.Sprintf("/repos/%s/%s/branches/%s", parts[1], parts[2], parts[3]),
-	}
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/branches/%s", parts[1], parts[2], parts[3])
 
-	log.Info(fmt.Sprintf("Going to request %s", apiURL.String()))
-	req, err := http.NewRequest("GET", apiURL.String(), nil)
+	log.Info(fmt.Sprintf("Going to request %s", apiURL))
+	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return 0, err
 	}
 
 	// get Github credentials from environment and add them to request
+	// credentials are required for querying private repositories
+	// and give higher rate limits
 	req.SetBasicAuth(os.Getenv(ghUserEnv), os.Getenv(ghTokenEnv))
 
 	client := &http.Client{}
@@ -181,57 +178,4 @@ func getBranchURLStatus(branchURL string) (status int, err error) {
 	}
 	resp.Body.Close()
 	return resp.StatusCode, nil
-}
-
-// assertEnv logs error messages if some env variables are not defined
-func assertEnv(vars ...string) {
-	log.Info("Asserting environment variables...")
-	undef := []string{}
-	for _, varName := range vars {
-		if _, ok := os.LookupEnv(varName); !ok {
-			undef = append(undef, varName)
-		}
-	}
-	if len(undef) != 0 {
-		log.Fatal(fmt.Sprintf("Env required but undefined: %s", strings.Join(undef, ", ")))
-	}
-	log.Info("Environment is fine")
-}
-
-// k8sConnect connects to Kubernetes cluster
-func k8sConnect() (*kubernetes.Clientset, *rest.Config, error) {
-	var err error
-	var config *rest.Config
-
-	if os.Getenv("APP_ENV") == "outside_cluster" {
-		//outside-cluster config (for development)
-		var kubeconfig *string
-
-		if home := homedir.HomeDir(); home != "" {
-			kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
-		} else {
-			kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
-		}
-
-		flag.Parse()
-
-		config, err = clientcmd.BuildConfigFromFlags("", *kubeconfig)
-		if err != nil {
-			return nil, nil, err
-		}
-	} else {
-		// in-cluster config (production usage)
-		config, err = rest.InClusterConfig()
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	return clientset, config, err
-}
-
-func prettyPrint(i interface{}) string {
-	s, _ := json.MarshalIndent(i, "", "\t")
-	return string(s)
 }
