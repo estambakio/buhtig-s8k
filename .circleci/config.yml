@@ -58,7 +58,7 @@ workflows:
       - build-app-image:
           requires:
             - init
-      - build-ci-image:
+      - build-cd-image:
           requires:
             - init
       - deploy:

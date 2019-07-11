@@ -61,11 +61,6 @@ func DeleteHelmRelease(releaseName string, client *kubernetes.Clientset, config 
 
 	helmClient := helm.NewClient(options...)
 
-	err := helmClient.PingTiller()
-	if err != nil {
-		log.Warn(err)
-	}
-
 	log.WithFields(log.Fields{"helm-release": releaseName}).Info("Deleting Helm release")
 
 	resp, err := helmClient.DeleteRelease(releaseName, helm.DeletePurge(true))
