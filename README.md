@@ -11,10 +11,10 @@ export GH_USER=...
 export GH_TOKEN=...
 
 // running outside of Kubernetes cluster (e.g. for development)
-APP_ENV=outside_cluster go run .
+APP_ENV=outside_cluster go run ./cmd
 
 // running inside cluster
-go run .
+go run ./cmd
 ```
 
 ### Required environment

@@ -62,7 +62,7 @@ func main() {
 		namespaces, err := clientset.CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: labelSelector})
 
 		if err != nil {
-			log.Warn(err.Error())
+			log.Error(err)
 			continue
 		}
 
@@ -78,7 +78,7 @@ func main() {
 		wg.Wait() // blocks until wg.Done() is called len(namespaces.Items) times
 
 		log.Info("Sleeping")
-		time.Sleep(time.Minute) // TODO?: make if confugurable
+		time.Sleep(time.Minute) // TODO?: make it configurable
 	}
 }
 
@@ -102,7 +102,7 @@ func processNamespace(ns *corev1.Namespace, wg *sync.WaitGroup) {
 	// check Github Url
 	status, err := getBranchURLStatus(githubURL)
 	if err != nil {
-		log.WithFields(log.Fields{"source": "getBranchURLStatus"}).Warn(err.Error())
+		log.WithFields(log.Fields{"source": "getBranchURLStatus"}).Error(err)
 		return
 	}
 	if status != 404 {
@@ -114,7 +114,7 @@ func processNamespace(ns *corev1.Namespace, wg *sync.WaitGroup) {
 	// delete namespace and Helm release
 	err = terminate(ns)
 	if err != nil {
-		log.WithFields(log.Fields{"terminate": "failure", "namespace": name}).Warn(err.Error())
+		log.WithFields(log.Fields{"terminate": "failure", "namespace": name}).Error(err)
 	} else {
 		log.WithFields(log.Fields{"terminate": "success", "namespace": name}).Info("Namespace terminated successfully")
 	}
@@ -128,7 +128,7 @@ func terminate(ns *corev1.Namespace) error {
 	// delete namespace
 	err := clientset.CoreV1().Namespaces().Delete(name, &metav1.DeleteOptions{})
 	if err != nil {
-		log.WithFields(log.Fields{"delete-namespace": "failure", "namespace": name}).Warn("Failed to delete namespace")
+		log.WithFields(log.Fields{"delete-namespace": "failure", "namespace": name}).Error("Failed to delete namespace")
 		return err
 	}
 	log.WithFields(log.Fields{"delete-namespace": "success", "namespace": name}).Info("Successfully deleted namespace")
@@ -143,7 +143,7 @@ func terminate(ns *corev1.Namespace) error {
 	// delete Helm release
 	err = helm.DeleteHelmRelease(helmRelease, clientset, config)
 	if err != nil {
-		log.WithFields(log.Fields{"delete-helm-release": "failure", "name": helmRelease}).Warn("Failed to delete helm release")
+		log.WithFields(log.Fields{"delete-helm-release": "failure", "name": helmRelease}).Error("Failed to delete helm release")
 		return err
 	}
 	log.WithFields(log.Fields{"delete-helm-release": "success", "name": helmRelease}).Info("Successfully deleted helm release")
