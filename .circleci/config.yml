@@ -9,7 +9,7 @@ jobs:
       - checkout
       - run: ./.circleci/update-dockerhub-credentials.sh
 
-  build-image:
+  build-app-image:
     docker:
     - image: docker
     steps:
@@ -17,19 +17,35 @@ jobs:
       - checkout
       - run: wget -O /vault.zip https://releases.hashicorp.com/vault/1.1.0/vault_1.1.0_linux_amd64.zip; unzip /vault.zip -d /usr/bin/
       - setup_remote_docker
-      - run: make build-image
-      - run: make publish-image
+      - run: make build-app-image
+      - run: make publish-app-image
+
+  build-ci-image:
+    docker:
+    - image: docker
+    steps:
+      - run: apk add --no-cache bash make git openssh
+      - checkout
+      - run: wget -O /vault.zip https://releases.hashicorp.com/vault/1.1.0/vault_1.1.0_linux_amd64.zip; unzip /vault.zip -d /usr/bin/
+      - setup_remote_docker
+      - run:
+          name: Check if image build is required
+          command: |
+            make docker-login
+            if [ -z "$(git show --name-only | grep build/docker)" ]; then
+              DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect opuscapita/buhtig-s8k:ci && \
+                circleci step halt || echo "Image doesn't exist, proceed"
+            fi
+      - run: make build-ci-image && make publish-ci-image
 
   deploy:
     docker:
-    - image: opuscapita/minsk-core-cd:1
+    - image: opuscapita/buhtig-s8k:ci
       auth:
         username: ${DOCKERHUB_USER}
         password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/build
     steps:
-      - run: wget -O /vault.zip https://releases.hashicorp.com/vault/1.1.0/vault_1.1.0_linux_amd64.zip; unzip /vault.zip -d /usr/bin/
-      - run: wget -O /usr/local/bin/ytt https://github.com/k14s/ytt/releases/download/v0.14.0/ytt-linux-amd64
       - checkout
       - run: make aks-login
       - run: make deploy
@@ -39,9 +55,13 @@ workflows:
   commit:
     jobs:
       - init
-      - build-image:
+      - build-app-image:
+          requires:
+            - init
+      - build-ci-image:
           requires:
             - init
       - deploy:
           requires:
-            - build-image
+            - build-app-image
+            - build-ci-image

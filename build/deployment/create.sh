@@ -11,22 +11,22 @@ command -v ytt >/dev/null 2>&1 || {
 script_dir=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 
 branch="$( git rev-parse --abbrev-ref HEAD )"
-safe_branch=$( $script_dir/generate-k8s-resource-name.sh $branch )
+safe_branch=$( $script_dir/../bin/generate-k8s-resource-name.sh $branch )
 
-github_project="$( $script_dir/github-project.sh )"
+github_project="$( $script_dir/../bin/github-project.sh )"
 github_reponame=$( echo $github_project | cut -d "/" -f 2 | tr '[:upper:]' '[:lower:]' )
 
-namespace=$( $script_dir/generate-k8s-resource-name.sh "dev-${github_reponame}-${safe_branch}" )
+namespace=$( $script_dir/../bin/generate-k8s-resource-name.sh "dev-${github_reponame}-${safe_branch}" )
 
-docker_repository=$( $script_dir/../docker/get-docker-repository.sh )
-docker_tag=$( $script_dir/../docker/get-docker-tag.sh )
+docker_repository=$( $script_dir/../docker/bin/get-docker-repository.sh )
+docker_tag=$( $script_dir/../docker/bin/get-docker-tag.sh )
 
 github_user=$( vault kv get -field=value minsk-core-kv/machineuser/github/username )
 github_token=$( vault kv get -field=value minsk-core-kv/machineuser/github/token )
 
 # deploy
 
-. $script_dir/assert-vars.sh namespace docker_repository docker_tag github_user github_token
+. $script_dir/../bin/assert-vars.sh namespace docker_repository docker_tag github_user github_token
 
 ytt \
   -v namespace="${namespace}" \

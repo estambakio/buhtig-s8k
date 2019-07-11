@@ -2,27 +2,35 @@
 
 .PHONY: docker-login
 docker-login: ## Login to Dockerhub
-	./build/docker/docker-login.sh
+	./build/docker/bin/docker-login.sh
 
-.PHONY: build-image
-build-image: docker-login ## Build Toolbox Docker image
-	./build/docker/build.sh
+.PHONY: build-ci-image
+build-ci-image: docker-login ## Build CI Docker image
+	./build/docker/ci/build.sh
 
-.PHONY: publish-image
-publish-image: docker-login ## Publish Toolbox Docker image
-	./build/docker/push.sh
+.PHONY: publish-ci-image
+publish-ci-image: docker-login ## Publish CI Docker image
+	./build/docker/ci/push.sh
+
+.PHONY: build-app-image
+build-app-image: docker-login ## Build App Docker image
+	./build/docker/app/build.sh
+
+.PHONY: publish-app-image
+publish-app-image: docker-login ## Publish App Docker image
+	./build/docker/app/push.sh
 
 .PHONY: aks-login
 aks-login: ## Login to Azure Kubernetes Service
 	./build/bin/aks-login.sh
 
 .PHONY: deploy
-deploy: ## Deploy to cloud (dev environment)
-	./build/bin/deploy.sh
+deploy: ## Deploy to Kubernetes cluster
+	./build/deployment/create.sh
 
 .PHONY: delete-deployment
-delete-deployment: ## Deploy to cloud (dev environment)
-	./build/bin/delete-deployment.sh
+delete-deployment: ## Delete deployment
+	./build/deployment/delete.sh
 
 .PHONY: help
 help:
