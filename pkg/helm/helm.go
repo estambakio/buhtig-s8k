@@ -2,6 +2,7 @@ package helm
 
 import (
 	"fmt"
+	"os"
 
 	"k8s.io/helm/pkg/helm"
 	"k8s.io/helm/pkg/helm/environment"
@@ -17,6 +18,10 @@ import (
 	"k8s.io/helm/pkg/helm/helmpath"
 )
 
+const (
+	tillerNamespaceEnv = "TILLER_NAMESPACE"
+)
+
 var (
 	tillerTunnel *kube.Tunnel
 	settings     environment.EnvSettings
@@ -24,7 +29,12 @@ var (
 
 // DeleteHelmRelease deletes provided release
 func DeleteHelmRelease(releaseName string, client *kubernetes.Clientset, config *rest.Config) error {
-	settings.TillerNamespace = "kube-system"
+	if tns, ok := os.LookupEnv(tillerNamespaceEnv); ok {
+		settings.TillerNamespace = tns
+	} else {
+		settings.TillerNamespace = "kube-system"
+	}
+
 	settings.Home = helmpath.Home(homedir.HomeDir() + "/.helm")
 	settings.TillerConnectionTimeout = 300
 

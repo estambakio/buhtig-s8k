@@ -4,6 +4,32 @@ Reflect some Github events in Kubernetes cluster
 
 This app deletes namespace and corresponding Helm release for development branch on Github in case this branch was deleted (e.g. merged and deleted as obsolete).
 
+## Usage
+
+```
+export GH_USER=...
+export GH_TOKEN=...
+
+// running outside of Kubernetes cluster (e.g. for development)
+APP_ENV=outside_cluster go run .
+
+// running inside cluster
+go run .
+```
+
+### Required environment
+
+App requires the following environment variables in scope:
+- `GH_USER` - username (login) in Github
+- `GH_TOKEN` - access token for this login
+
+`GH_USER` and `GH_TOKEN` are used for Basic Auth in requests to Github API.
+
+### Additional configuration
+
+Also the following environment can be specified:
+- `TILLER_NAMESPACE` - default is "kube-system", specify your own if Tiller is installed in a different namespace
+
 ## What's about the name?
 
 This is `k8s-github` reversed.
@@ -20,7 +46,7 @@ When a development branch is created in application's Github repository correspo
 ## How it works
 
 It runs as a single service in its own namespace and handles this task in Kubernetes-ish way. How it works:
-- if certain deployment (read: namespace) is a development branch which is target for this cleanup logic, then we just label this namespace with this `label`: `opuscapita.com/buhtig-s8k: true` and annotate with `annotations`:
+- if certain deployment (read: namespace) is a development branch which is target for this cleanup logic, then we just label this namespace with this `label`: `opuscapita.com/buhtig-s8k: "true"` and annotate with `annotations`:
   - `opuscapita.com/github-source-url: https://github.com/OpusCapita/repository/tree/my-dev-branch`
   - `opuscapita.com/helm-release: dev-repository-my-dev-branch`
 - our service runs every minute: find namespace with aforementioned label, query `github-source-url` and in case it returns 404 delete provided Helm release and delete namespace itself

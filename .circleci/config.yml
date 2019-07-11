@@ -1,0 +1,47 @@
+version: 2
+
+jobs:
+  init:
+    docker:
+      - image: alpine
+    steps:
+      - run: apk add --no-cache git curl openssh
+      - checkout
+      - run: ./.circleci/update-dockerhub-credentials.sh
+
+  build-image:
+    docker:
+    - image: docker
+    steps:
+      - run: apk add --no-cache bash make git openssh
+      - checkout
+      - run: wget -O /vault.zip https://releases.hashicorp.com/vault/1.1.0/vault_1.1.0_linux_amd64.zip; unzip /vault.zip -d /usr/bin/
+      - setup_remote_docker
+      - run: make build-image
+      - run: make publish-image
+
+  deploy:
+    docker:
+    - image: opuscapita/minsk-core-cd:1
+      auth:
+        username: ${DOCKERHUB_USER}
+        password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/build
+    steps:
+      - run: wget -O /vault.zip https://releases.hashicorp.com/vault/1.1.0/vault_1.1.0_linux_amd64.zip; unzip /vault.zip -d /usr/bin/
+      - run: wget -O /usr/local/bin/ytt https://github.com/k14s/ytt/releases/download/v0.14.0/ytt-linux-amd64
+      - checkout
+      - run: make aks-login
+      - run: make deploy
+
+workflows:
+  version: 2
+  commit:
+    jobs:
+      - init
+      - build-image:
+          requires:
+            - init
+      - deploy:
+          requires:
+            - build-image
