@@ -28,7 +28,6 @@ const (
 	githubURLAnnotationName   = "opuscapita.com/github-source-url"
 	helmReleaseAnnotationName = "opuscapita.com/helm-release"
 
-	// ghUserEnv  = "GH_USER"
 	ghTokenEnv = "GH_TOKEN"
 )
 
@@ -142,7 +141,7 @@ func terminate(ns *corev1.Namespace) error {
 	}
 
 	// delete Helm release
-	err = helm.DeleteHelmRelease(helmRelease, clientset, config)
+	err = helm.DeleteRelease(helmRelease, clientset, config)
 	if err != nil {
 		log.WithFields(log.Fields{"delete-helm-release": "failure", "name": helmRelease}).Error("Failed to delete helm release")
 		return err

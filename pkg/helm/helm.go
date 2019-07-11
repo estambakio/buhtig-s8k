@@ -27,8 +27,8 @@ var (
 	settings     environment.EnvSettings
 )
 
-// DeleteHelmRelease deletes provided release
-func DeleteHelmRelease(releaseName string, client *kubernetes.Clientset, config *rest.Config) error {
+// DeleteRelease deletes provided release
+func DeleteRelease(name string, client *kubernetes.Clientset, config *rest.Config) error {
 	if tns, ok := os.LookupEnv(tillerNamespaceEnv); ok {
 		settings.TillerNamespace = tns
 	} else {
@@ -61,9 +61,9 @@ func DeleteHelmRelease(releaseName string, client *kubernetes.Clientset, config 
 
 	helmClient := helm.NewClient(options...)
 
-	log.WithFields(log.Fields{"helm-release": releaseName}).Info("Deleting Helm release")
+	log.WithFields(log.Fields{"helm-release": name}).Info("Deleting Helm release")
 
-	resp, err := helmClient.DeleteRelease(releaseName, helm.DeletePurge(true))
+	resp, err := helmClient.DeleteRelease(name, helm.DeletePurge(true))
 	if err != nil {
 		return err
 	}
