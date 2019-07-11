@@ -4,13 +4,13 @@
 docker-login: ## Login to Dockerhub
 	./build/docker/bin/docker-login.sh
 
-.PHONY: build-ci-image
+.PHONY: build-cd-image
 build-ci-image: ## Build CI Docker image
-	./build/docker/ci/build.sh
+	./build/docker/cd/build.sh
 
-.PHONY: publish-ci-image
+.PHONY: publish-cd-image
 publish-ci-image: docker-login ## Publish CI Docker image
-	./build/docker/ci/push.sh
+	./build/docker/cd/push.sh
 
 .PHONY: compile
 compile: ## Compile Go binary

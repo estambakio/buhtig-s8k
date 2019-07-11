@@ -20,7 +20,7 @@ jobs:
       - run: make build-app-image
       - run: make publish-app-image
 
-  build-ci-image:
+  build-cd-image:
     docker:
     - image: docker
     steps:
@@ -33,14 +33,14 @@ jobs:
           command: |
             make docker-login
             if [ -z "$(git show --name-only | grep build/docker)" ]; then
-              DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect opuscapita/buhtig-s8k:ci && \
+              DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect opuscapita/buhtig-s8k:cd && \
                 circleci step halt || echo "Image doesn't exist, proceed"
             fi
-      - run: make build-ci-image && make publish-ci-image
+      - run: make build-cd-image && make publish-cd-image
 
   deploy:
     docker:
-    - image: opuscapita/buhtig-s8k:ci
+    - image: opuscapita/buhtig-s8k:cd
       auth:
         username: ${DOCKERHUB_USER}
         password: ${DOCKERHUB_PASSWORD}
@@ -64,4 +64,4 @@ workflows:
       - deploy:
           requires:
             - build-app-image
-            - build-ci-image
+            - build-cd-image
