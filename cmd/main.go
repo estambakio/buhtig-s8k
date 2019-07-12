@@ -93,7 +93,9 @@ func main() {
 			wg.Add(len(namespaces.Items))
 
 			for _, ns := range namespaces.Items {
-				go processNamespace(&ns, &wg)
+				go func(ns corev1.Namespace) {
+					processNamespace(&ns, &wg) // TODO: consider using channels instead of WG and probably select on functions and common time.Timer timeout
+				}(ns) // make local variable; otherwise all goroutines will get the latest one, like in JavaScript's setTimeout situation
 			}
 
 			wg.Wait() // blocks until wg.Done() is called len(namespaces.Items) times
