@@ -37,6 +37,7 @@ spec:
       containers:
       - name: buhtig-s8k
         image: #@ data.values.image
+        imagePullPolicy: Always
         env:
         - name: GH_TOKEN
           valueFrom:
