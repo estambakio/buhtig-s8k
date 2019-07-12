@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -58,24 +59,53 @@ func init() {
 
 func main() {
 	for {
-		log.Info("Getting namespaces")
-		namespaces, err := clientset.CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: labelSelector})
+		// run every iteration in a function to make use of panic recovery in order to
+		// avoid crushing if panic happens somewhere downstream
+		err := func() error {
+			var err error
+			// recover from panic in case it happens somewhere downstream
+			// and set appropriate err value
+			defer func() {
+				if r := recover(); r != nil {
+					switch t := r.(type) {
+					case string:
+						err = errors.New(t)
+					case error:
+						err = t
+					default:
+						err = errors.New(fmt.Sprintf("%v", t))
+					}
+				}
+			}()
+
+			// start round trip
+			log.Info("Getting namespaces")
+			namespaces, err := clientset.CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: labelSelector})
+			if err != nil {
+				return err
+			}
+
+			log.Info(fmt.Sprintf("Found %d namespaces", len(namespaces.Items)))
+
+			var wg sync.WaitGroup
+			wg.Add(len(namespaces.Items))
+
+			for _, ns := range namespaces.Items {
+				go processNamespace(&ns, &wg)
+			}
+
+			wg.Wait() // blocks until wg.Done() is called len(namespaces.Items) times
+
+			// err == nil
+			// it can be != nil only if panic has happened;
+			// in case of panic 'defer' function sets err value
+			return err
+		}()
 
 		if err != nil {
-			log.Error(err)
-			continue
+			// exception was catched
+			log.WithFields(log.Fields{"iteration": "error"}).Error(err)
 		}
-
-		log.Info(fmt.Sprintf("Found %d namespaces", len(namespaces.Items)))
-
-		var wg sync.WaitGroup
-		wg.Add(len(namespaces.Items))
-
-		for _, ns := range namespaces.Items {
-			go processNamespace(&ns, &wg)
-		}
-
-		wg.Wait() // blocks until wg.Done() is called len(namespaces.Items) times
 
 		log.Info("Sleeping")
 		time.Sleep(time.Minute) // TODO?: make it configurable
