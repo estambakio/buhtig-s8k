@@ -38,8 +38,9 @@ metadata:
 ```
 
 If branch `issue-34` is deleted from repository `OpusCapita/some-repo` then application will:
-- delete Helm release `dev-some-repo-issue-34` (in the same fashion as `helm delete --purge dev-some-repo-issue-34`)
-- delete namespace 
+- delete Helm release `dev-some-repo-issue-34`
+  (in the same fashion as `helm delete --purge dev-some-repo-issue-34`)
+- delete namespace `dev-some-repo-issue-34`
 
 ### Running
 
