@@ -38,7 +38,7 @@ func DeleteRelease(name string, client *kubernetes.Clientset, config *rest.Confi
 	}
 
 	settings.Home = helmpath.Home(homedir.HomeDir() + "/.helm")
-	settings.TillerConnectionTimeout = 10
+	settings.TillerConnectionTimeout = 60
 
 	if settings.TillerHost == "" {
 		tillerTunnel, err := portforwarder.New(settings.TillerNamespace, client, config)
