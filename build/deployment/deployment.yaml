@@ -21,7 +21,6 @@ metadata:
   name: buhtig-s8k
   labels:
     app: buhtig-s8k
-    #! use keel to update image if its digest has changed
     keel.sh/policy: force
     keel.sh/trigger: poll
   namespace: #@ data.values.namespace
