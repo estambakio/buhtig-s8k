@@ -1,24 +1,26 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"regexp"
 	"sync"
 	"time"
+
+	"golang.org/x/oauth2"
 
 	"k8s.io/client-go/kubernetes"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 
 	log "github.com/sirupsen/logrus"
 
 	helm "github.com/OpusCapita/buhtig-s8k/pkg/helm"
-
 	konnect "github.com/OpusCapita/buhtig-s8k/pkg/konnect"
 )
 
@@ -28,7 +30,6 @@ const (
 	githubURLAnnotationName   = "opuscapita.com/github-source-url"
 	helmReleaseAnnotationName = "opuscapita.com/helm-release"
 
-	ghUserEnv  = "GH_USER"
 	ghTokenEnv = "GH_TOKEN"
 )
 
@@ -54,7 +55,7 @@ func init() {
 	}
 
 	// assert if required env variables are defined
-	assertEnv(ghUserEnv, ghTokenEnv)
+	assertEnv(ghTokenEnv)
 }
 
 func main() {
@@ -63,6 +64,7 @@ func main() {
 		// avoid crushing if panic happens somewhere downstream
 		err := func() error {
 			var err error
+
 			// recover from panic in case it happens somewhere downstream
 			// and set appropriate err value
 			defer func() {
@@ -78,8 +80,8 @@ func main() {
 				}
 			}()
 
-			// start round trip
 			log.Info("Getting namespaces")
+
 			namespaces, err := clientset.CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: labelSelector})
 			if err != nil {
 				return err
@@ -121,13 +123,15 @@ func processNamespace(ns *corev1.Namespace, wg *sync.WaitGroup) {
 	name := ns.ObjectMeta.Name
 	annotations := ns.ObjectMeta.Annotations
 
+	logger := log.WithFields(log.Fields{"namespace": name, "func": "processNamespace"})
+
 	githubURL, ok := annotations[githubURLAnnotationName]
 	if !ok {
-		log.Warn(fmt.Sprintf("Annotation '%s' not set in namespace '%s'", githubURLAnnotationName, name))
+		logger.Warn(fmt.Sprintf("Annotation '%s' not set", githubURLAnnotationName))
 		return
 	}
 
-	log.Info(fmt.Sprintf("Namespace '%s' has '%s' set to '%s'", name, githubURLAnnotationName, githubURL))
+	logger.Info(fmt.Sprintf("%s = %s", githubURLAnnotationName, githubURL))
 
 	// check Github Url
 	status, err := getBranchURLStatus(githubURL)
@@ -136,48 +140,85 @@ func processNamespace(ns *corev1.Namespace, wg *sync.WaitGroup) {
 		return
 	}
 	if status != 404 {
-		log.Info(fmt.Sprintf("Received status %d for URL %s, do nothing", status, githubURL))
+		logger.Info(fmt.Sprintf("Received status %d for URL %s, do nothing", status, githubURL))
 		return
 	}
-	log.Info(fmt.Sprintf("Received status %d for URL %s, call the Terminator!", status, githubURL))
+	logger.Info(fmt.Sprintf("Received status %d for URL %s, call the Terminator!", status, githubURL))
 
-	// delete namespace and Helm release
-	err = terminate(ns)
+	if err := deleteHelmReleaseForNamespace(name); err != nil {
+		logger.Error(err)
+		return
+	}
+
+	err = deleteNamespace(name)
 	if err != nil {
-		log.WithFields(log.Fields{"terminate": "failure", "namespace": name}).Error(err)
+		logger.Error(err)
 	} else {
-		log.WithFields(log.Fields{"terminate": "success", "namespace": name}).Info("Namespace terminated successfully")
+		logger.Info("Namespace terminated successfully")
 	}
 }
 
-// terminate is a function which deletes provided namespace
-func terminate(ns *corev1.Namespace) error {
-	name := ns.ObjectMeta.Name
-	annotations := ns.ObjectMeta.Annotations
+// deleteNamespace is a function which deletes provided namespace
+func deleteNamespace(name string) error {
+	logger := log.WithFields(log.Fields{"namespace": name, "func": "deleteNamespace"})
 
-	// delete namespace
-	err := clientset.CoreV1().Namespaces().Delete(name, &metav1.DeleteOptions{})
-	if err != nil {
-		log.WithFields(log.Fields{"delete-namespace": "failure", "namespace": name}).Error("Failed to delete namespace")
-		return err
-	}
-	log.WithFields(log.Fields{"delete-namespace": "success", "namespace": name}).Info("Successfully deleted namespace")
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		logger.Info("Getting namespace")
+		ns, err := clientset.CoreV1().Namespaces().Get(name, metav1.GetOptions{})
 
-	// lookup helm-release annotation
-	helmRelease, ok := annotations[helmReleaseAnnotationName]
-	if !ok {
-		log.Warn(fmt.Sprintf("Annotation '%s' not set in namespace '%s', skip deleting Helm release", helmReleaseAnnotationName, name))
+		if err != nil {
+			logger.Error(err)
+			return nil // namespace not found, nothing to delete
+		}
+
+		if ns.Status.Phase == corev1.NamespaceTerminating {
+			logger.Warn("Namespace is in terminanting state, bailing out...")
+			return nil
+		}
+
+		logger.Info("Trying to delete namespace")
+		err = clientset.CoreV1().Namespaces().Delete(name, &metav1.DeleteOptions{})
+		if err != nil {
+			logger.Error(err)
+			return err
+		}
+		logger.Info("Successfully deleted namespace")
 		return nil
-	}
+	})
 
-	// delete Helm release
-	err = helm.DeleteHelmRelease(helmRelease, clientset, config)
-	if err != nil {
-		log.WithFields(log.Fields{"delete-helm-release": "failure", "name": helmRelease}).Error("Failed to delete helm release")
-		return err
-	}
-	log.WithFields(log.Fields{"delete-helm-release": "success", "name": helmRelease}).Info("Successfully deleted helm release")
-	return nil
+	return retryErr
+}
+
+// deleteHelmReleaseForNamespace is a function which deletes Helm release associated with this namespace
+func deleteHelmReleaseForNamespace(name string) error {
+	logger := log.WithFields(log.Fields{"namespace": name, "func": "deleteHelmRelease"})
+
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		logger.Info("Getting namespace")
+		ns, err := clientset.CoreV1().Namespaces().Get(name, metav1.GetOptions{})
+		if err != nil {
+			logger.Error(err)
+			return nil // namespace not found, nothing to delete
+		}
+
+		// lookup helm-release annotation
+		helmReleaseName, ok := ns.ObjectMeta.Annotations[helmReleaseAnnotationName]
+		if !ok {
+			logger.Warn(fmt.Sprintf("Annotation '%s' not set in namespace '%s', skip deleting Helm release", helmReleaseAnnotationName, name))
+			return nil
+		}
+
+		logger.Info("Trying to delete Helm release")
+		err = helm.DeleteRelease(helmReleaseName, clientset, config)
+		if err != nil {
+			logger.Error(err)
+			return err
+		}
+		logger.Info("Successfully deleted helm release")
+		return nil
+	})
+
+	return retryErr
 }
 
 // getBranchURLStatus expects URL like https://github.com/USER/REPO/tree/BRANCH
@@ -188,24 +229,20 @@ func getBranchURLStatus(branchURL string) (status int, err error) {
 		return 0, fmt.Errorf("branchURL doesn't match regexp: %v", parts)
 	}
 
+	// get auth token from env variable
+	tokenSource := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: os.Getenv(ghTokenEnv)},
+	)
+	httpClient := oauth2.NewClient(context.Background(), tokenSource)
+
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/branches/%s", parts[1], parts[2], parts[3])
 
-	log.Info(fmt.Sprintf("Going to request %s", apiURL))
-	req, err := http.NewRequest("GET", apiURL, nil)
+	resp, err := httpClient.Get(apiURL)
+	defer resp.Body.Close()
+
 	if err != nil {
 		return 0, err
 	}
 
-	// get Github credentials from environment and add them to request
-	// credentials are required for querying private repositories
-	// and give higher rate limits
-	req.SetBasicAuth(os.Getenv(ghUserEnv), os.Getenv(ghTokenEnv))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	resp.Body.Close()
 	return resp.StatusCode, nil
 }

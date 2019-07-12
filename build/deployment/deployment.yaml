@@ -13,7 +13,6 @@ metadata:
   namespace: #@ data.values.namespace
 type: Opaque
 data:
-  username: #@ base64.encode(data.values.github.user)
   token: #@ base64.encode(data.values.github.token)
 ---
 apiVersion: apps/v1
@@ -37,11 +36,6 @@ spec:
       - name: buhtig-s8k
         image: #@ data.values.image
         env:
-        - name: GH_USER
-          valueFrom:
-            secretKeyRef:
-              name: github
-              key: username
         - name: GH_TOKEN
           valueFrom:
             secretKeyRef:

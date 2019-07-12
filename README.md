@@ -6,24 +6,28 @@ This app deletes namespace and corresponding Helm release for development branch
 
 ## Usage
 
+### Running
+
 ```
-export GH_USER=...
 export GH_TOKEN=...
 
 // running outside of Kubernetes cluster (e.g. for development)
 APP_ENV=outside_cluster go run ./cmd
+// OR (the same)
+make run
 
 // running inside cluster
 go run ./cmd
 ```
 
+### Building
+
+`make build`
+
 ### Required environment
 
 App requires the following environment variables in scope:
-- `GH_USER` - username (login) in Github
-- `GH_TOKEN` - access token for this login
-
-`GH_USER` and `GH_TOKEN` are used for Basic Auth in requests to Github API.
+- `GH_TOKEN` - access token for authenticating requests to Github (e.g. personal access token)
 
 ### Additional configuration
 

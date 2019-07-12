@@ -12,9 +12,13 @@ build-cd-image: ## Build CI Docker image
 publish-cd-image: docker-login ## Publish CI Docker image
 	./build/docker/cd/push.sh
 
-.PHONY: compile
-compile: ## Compile Go binary
+.PHONY: build
+build: ## Build binary
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./dist/app ./cmd
+
+.PHONY: run
+run: ## Go run
+	APP_ENV=outside_cluster go run ./cmd
 
 .PHONY: build-app-image
 build-app-image: ## Build App Docker image

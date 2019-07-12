@@ -27,8 +27,10 @@ var (
 	settings     environment.EnvSettings
 )
 
-// DeleteHelmRelease deletes provided release
-func DeleteHelmRelease(releaseName string, client *kubernetes.Clientset, config *rest.Config) error {
+// DeleteRelease deletes provided release
+func DeleteRelease(name string, client *kubernetes.Clientset, config *rest.Config) error {
+	logger := log.WithFields(log.Fields{"helm-release": name, "func": "helm.DeleteRelease"})
+
 	if tns, ok := os.LookupEnv(tillerNamespaceEnv); ok {
 		settings.TillerNamespace = tns
 	} else {
@@ -36,7 +38,7 @@ func DeleteHelmRelease(releaseName string, client *kubernetes.Clientset, config 
 	}
 
 	settings.Home = helmpath.Home(homedir.HomeDir() + "/.helm")
-	settings.TillerConnectionTimeout = 300
+	settings.TillerConnectionTimeout = 10
 
 	if settings.TillerHost == "" {
 		tillerTunnel, err := portforwarder.New(settings.TillerNamespace, client, config)
@@ -45,11 +47,11 @@ func DeleteHelmRelease(releaseName string, client *kubernetes.Clientset, config 
 		}
 
 		settings.TillerHost = fmt.Sprintf("127.0.0.1:%d", tillerTunnel.Local)
-		log.Info(fmt.Sprintf("Created tunnel using local port: '%d'\n", tillerTunnel.Local))
+		logger.Info(fmt.Sprintf("Created tunnel using local port: '%d'\n", tillerTunnel.Local))
 	}
 
 	// Set up the gRPC config.
-	log.Info(fmt.Sprintf("SERVER: %q\n", settings.TillerHost))
+	logger.Info(fmt.Sprintf("SERVER: %q\n", settings.TillerHost))
 
 	defer func() {
 		if tillerTunnel != nil {
@@ -61,10 +63,20 @@ func DeleteHelmRelease(releaseName string, client *kubernetes.Clientset, config 
 
 	helmClient := helm.NewClient(options...)
 
-	log.WithFields(log.Fields{"helm-release": releaseName}).Info("Deleting Helm release")
+	if err := helmClient.PingTiller(); err != nil {
+		return err
+	}
 
-	resp, err := helmClient.DeleteRelease(releaseName, helm.DeletePurge(true))
+	logger.Info("Check if release exists")
+	if _, err := helmClient.ReleaseStatus(name); err != nil {
+		logger.Error(err)
+		return nil
+	}
+
+	logger.Info("Deleting Helm release")
+	resp, err := helmClient.DeleteRelease(name, helm.DeletePurge(true), helm.DeleteTimeout(10))
 	if err != nil {
+		logger.Error(err)
 		return err
 	}
 
