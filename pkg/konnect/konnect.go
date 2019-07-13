@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+// NewConfig returns K8s config
 func NewConfig() (*rest.Config, error) {
 	var err error
 	var config *rest.Config
@@ -44,6 +45,14 @@ func NewConfig() (*rest.Config, error) {
 	return config, nil
 }
 
-func NewClientset(config *rest.Config) (*kubernetes.Clientset, error) {
-	return kubernetes.NewForConfig(config)
+// NewClient returns new K8s client for given config (optional)
+func NewClient(config *rest.Config) (client *kubernetes.Clientset, err error) {
+	if config == nil {
+		config, err = NewConfig()
+		if err != nil {
+			return nil, err
+		}
+	}
+	client, err = kubernetes.NewForConfig(config)
+	return client, err
 }

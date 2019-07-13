@@ -6,15 +6,13 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
 
-	"k8s.io/client-go/kubernetes"
-
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/retry"
 
@@ -33,112 +31,211 @@ const (
 	ghTokenEnv = "GH_TOKEN"
 )
 
-var clientset *kubernetes.Clientset
-var config *rest.Config
-var ghBranchURLRe *regexp.Regexp
+var k8sConfig *rest.Config
+var k8sClient *kubernetes.Clientset
 
 func init() {
+	log.SetLevel(log.DebugLevel)
 	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
-
-	ghBranchURLRe = regexp.MustCompile("https://github.com/([^/]+)/([^/]+)/tree/([^/]+)")
-
-	// setup kubernetes client
-	var err error
-	config, err = konnect.NewConfig()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	clientset, err = konnect.NewClientset(config)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	// assert if required env variables are defined
 	assertEnv(ghTokenEnv)
+
+	// setup K8s client
+	var err error
+
+	k8sConfig, err = konnect.NewConfig()
+	if err != nil {
+		panic(err)
+	}
+
+	k8sClient, err = konnect.NewClient(k8sConfig)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func main() {
+	start := make(chan struct{}, 1)
+	errReport := make(chan error, 1)
+
 	for {
-		// run every iteration in a function to make use of panic recovery in order to
-		// avoid crushing if panic happens somewhere downstream
-		err := func() error {
-			var err error
+		// spawn main routine
+		go process(start, errReport)
 
-			// recover from panic in case it happens somewhere downstream
-			// and set appropriate err value
-			defer func() {
-				if r := recover(); r != nil {
-					switch t := r.(type) {
-					case string:
-						err = errors.New(t)
-					case error:
-						err = t
-					default:
-						err = errors.New(fmt.Sprintf("%v", t))
-					}
-				}
-			}()
+		// start first iteration
+		start <- struct{}{}
 
-			log.Info("Getting namespaces")
+		// block until 'process' throws exception
+		// and log returned error
+		// then start over again
+		err := <-errReport
+		log.Error(err)
+	}
+}
 
-			namespaces, err := clientset.CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: labelSelector})
-			if err != nil {
-				return err
+type namespace corev1.Namespace
+
+func (ns *namespace) Name() string {
+	return ns.ObjectMeta.Name
+}
+
+func (ns *namespace) logger() *log.Entry {
+	return log.WithFields(log.Fields{"namespace": ns.Name()})
+}
+
+func (ns *namespace) GithubSourceURL() (string, error) {
+	githubURL, ok := ns.ObjectMeta.Annotations[githubURLAnnotationName]
+	if !ok {
+		return "", fmt.Errorf("Annotation '%s' not set", githubURLAnnotationName)
+	}
+	ns.logger().Debug(fmt.Sprintf("%s = %s", githubURLAnnotationName, githubURL))
+	return githubURL, nil
+}
+
+func (ns *namespace) HelmRelease() (string, error) {
+	helmRelease, ok := ns.ObjectMeta.Annotations[helmReleaseAnnotationName]
+	if !ok {
+		return "", fmt.Errorf("Annotation '%s' not set", helmReleaseAnnotationName)
+	}
+	return helmRelease, nil
+}
+
+func (ns *namespace) String() string {
+	return ns.Name()
+}
+
+type pendingRequest struct {
+	ns   *namespace
+	done chan *namespace
+}
+
+// process is the main function designed to run infinitely
+func process(start chan struct{}, errReport chan<- error) {
+	defer func() {
+		var err error
+		if r := recover(); r != nil {
+			switch t := r.(type) {
+			case string:
+				err = errors.New(t)
+			case error:
+				err = t
+			default:
+				err = fmt.Errorf("%v", t)
 			}
-
-			log.Info(fmt.Sprintf("Found %d namespaces", len(namespaces.Items)))
-
-			var wg sync.WaitGroup
-			wg.Add(len(namespaces.Items))
-
-			for _, ns := range namespaces.Items {
-				go func(ns corev1.Namespace) {
-					processNamespace(&ns, &wg) // TODO: consider using channels instead of WG and probably select on functions and common time.Timer timeout
-				}(ns) // make local variable; otherwise all goroutines will get the latest one, like in JavaScript's setTimeout situation
-			}
-
-			wg.Wait() // blocks until wg.Done() is called len(namespaces.Items) times
-
-			// err == nil
-			// it can be != nil only if panic has happened;
-			// in case of panic 'defer' function sets err value
-			return err
-		}()
-
-		if err != nil {
-			// exception was catched
-			log.WithFields(log.Fields{"iteration": "error"}).Error(err)
 		}
+		// report exception to errReport channel
+		errReport <- err
+	}()
 
-		log.Info("Sleeping")
-		time.Sleep(time.Minute) // TODO?: make it configurable
+	for {
+		select {
+		case <-start:
+			log.Info("Trigger received value -> Starting new iteration")
+
+			log.Debug("Getting namespaces")
+
+			nsList, err := k8sClient.CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: labelSelector})
+			if err != nil {
+				panic(err)
+			}
+
+			var namespaces []*namespace
+
+			for _, ns := range nsList.Items {
+				coercedNs := namespace(ns) // convert to our type to enable methods
+				namespaces = append(namespaces, &coercedNs)
+			}
+
+			num := len(namespaces)
+
+			log.Info(fmt.Sprintf("Found %d relevant namespaces", num))
+
+			if num == 0 {
+				go reschedule(start)
+				continue
+			}
+
+			// make channel for pending requests which contain namespaces due to be processed
+			// it has a buffer equal to namespaces length which is needed for case if we need
+			// less workers than number of namespaces (e.g. for sequential processing we can use 1 worker)
+			pending := make(chan *pendingRequest, num)
+
+			// make channel for namespaces which completed workflow doesn't matter how exactly
+			complete := make(chan *namespace, num)
+
+			log.Debug("Spawn worker")
+			go worker(pending)
+
+			for _, ns := range namespaces {
+				req := &pendingRequest{
+					ns:   ns,
+					done: complete,
+				}
+				ns.logger().Debug("Pushing request to pending channel")
+				pending <- req
+			}
+
+			waitFor := num
+
+			for ns := range complete {
+				ns.logger().Debug("Namespace completed")
+				waitFor--
+				if waitFor == 0 {
+					// workers will exit when 'pending' channel is closed
+					close(pending)
+					// this for loop ('range complete') will exit when 'complete' channel is closed
+					close(complete)
+
+					log.Debug("All namespaces completed, time to reschedule")
+					go reschedule(start)
+				}
+			}
+		}
+	}
+}
+
+func reschedule(start chan<- struct{}) {
+	log.Info("Sleep")
+	<-time.After(time.Minute)
+	log.Debug("Reschedule")
+	start <- struct{}{}
+}
+
+// worker reads from pending channel, and spawns process routine per namespace
+// it will exit when pending channel is closed
+func worker(pending <-chan *pendingRequest) {
+	log.Debug(fmt.Sprintf("Worker spawned"))
+
+	defer func() {
+		log.Debug(fmt.Sprintf("Worker exits"))
+	}()
+
+	for req := range pending {
+		go processNamespace(req.ns, req.done)
 	}
 }
 
 // processNamespace does a single run of our business logic for particular namespace
-func processNamespace(ns *corev1.Namespace, wg *sync.WaitGroup) {
-	// wg.Done() is called right before function returns
+func processNamespace(ns *namespace, done chan<- *namespace) {
+	// deferred function is called right before function returns
 	// we don't care what the outcome was, we just need to know when this run is finished
-	defer wg.Done()
+	defer func() {
+		done <- ns
+	}()
 
-	name := ns.ObjectMeta.Name
-	annotations := ns.ObjectMeta.Annotations
+	logger := ns.logger()
 
-	logger := log.WithFields(log.Fields{"namespace": name, "func": "processNamespace"})
-
-	githubURL, ok := annotations[githubURLAnnotationName]
-	if !ok {
-		logger.Warn(fmt.Sprintf("Annotation '%s' not set", githubURLAnnotationName))
+	githubURL, err := ns.GithubSourceURL()
+	if err != nil {
+		logger.Error(err)
 		return
 	}
-
-	logger.Info(fmt.Sprintf("%s = %s", githubURLAnnotationName, githubURL))
 
 	// check Github Url
 	status, err := getBranchURLStatus(githubURL)
 	if err != nil {
-		log.WithFields(log.Fields{"source": "getBranchURLStatus"}).Error(err)
+		logger.Error(err)
 		return
 	}
 	if status != 404 {
@@ -147,12 +244,12 @@ func processNamespace(ns *corev1.Namespace, wg *sync.WaitGroup) {
 	}
 	logger.Info(fmt.Sprintf("Received status %d for URL %s, call the Terminator!", status, githubURL))
 
-	if err := deleteHelmReleaseForNamespace(name); err != nil {
+	if err := deleteHelmReleaseForNamespace(ns); err != nil {
 		logger.Error(err)
 		return
 	}
 
-	err = deleteNamespace(name)
+	err = deleteNamespace(ns)
 	if err != nil {
 		logger.Error(err)
 	} else {
@@ -161,25 +258,25 @@ func processNamespace(ns *corev1.Namespace, wg *sync.WaitGroup) {
 }
 
 // deleteNamespace is a function which deletes provided namespace
-func deleteNamespace(name string) error {
-	logger := log.WithFields(log.Fields{"namespace": name, "func": "deleteNamespace"})
+func deleteNamespace(ns *namespace) error {
+	logger := ns.logger()
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		logger.Info("Getting namespace")
-		ns, err := clientset.CoreV1().Namespaces().Get(name, metav1.GetOptions{})
+		logger.Debug("Getting namespace")
+		k8sNs, err := k8sClient.CoreV1().Namespaces().Get(ns.Name(), metav1.GetOptions{})
 
 		if err != nil {
 			logger.Error(err)
 			return nil // namespace not found, nothing to delete
 		}
 
-		if ns.Status.Phase == corev1.NamespaceTerminating {
+		if k8sNs.Status.Phase == corev1.NamespaceTerminating {
 			logger.Warn("Namespace is in terminanting state, bailing out...")
 			return nil
 		}
 
 		logger.Info("Trying to delete namespace")
-		err = clientset.CoreV1().Namespaces().Delete(name, &metav1.DeleteOptions{})
+		err = k8sClient.CoreV1().Namespaces().Delete(ns.Name(), &metav1.DeleteOptions{})
 		if err != nil {
 			logger.Error(err)
 			return err
@@ -192,26 +289,17 @@ func deleteNamespace(name string) error {
 }
 
 // deleteHelmReleaseForNamespace is a function which deletes Helm release associated with this namespace
-func deleteHelmReleaseForNamespace(name string) error {
-	logger := log.WithFields(log.Fields{"namespace": name, "func": "deleteHelmRelease"})
+func deleteHelmReleaseForNamespace(ns *namespace) error {
+	logger := ns.logger()
 
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		logger.Info("Getting namespace")
-		ns, err := clientset.CoreV1().Namespaces().Get(name, metav1.GetOptions{})
+		helmRelease, err := ns.HelmRelease()
 		if err != nil {
-			logger.Error(err)
-			return nil // namespace not found, nothing to delete
-		}
-
-		// lookup helm-release annotation
-		helmReleaseName, ok := ns.ObjectMeta.Annotations[helmReleaseAnnotationName]
-		if !ok {
-			logger.Warn(fmt.Sprintf("Annotation '%s' not set in namespace '%s', skip deleting Helm release", helmReleaseAnnotationName, name))
-			return nil
+			return err
 		}
 
 		logger.Info("Trying to delete Helm release")
-		err = helm.DeleteRelease(helmReleaseName, clientset, config)
+		err = helm.DeleteRelease(helmRelease, k8sClient, k8sConfig)
 		if err != nil {
 			logger.Error(err)
 			return err
@@ -226,6 +314,7 @@ func deleteHelmReleaseForNamespace(name string) error {
 // getBranchURLStatus expects URL like https://github.com/USER/REPO/tree/BRANCH
 // it queries Github API and returns status code of HTTP response
 func getBranchURLStatus(branchURL string) (status int, err error) {
+	ghBranchURLRe := regexp.MustCompile("https://github.com/([^/]+)/([^/]+)/tree/([^/]+)")
 	parts := ghBranchURLRe.FindStringSubmatch(branchURL)
 	if parts == nil || len(parts) < 4 {
 		return 0, fmt.Errorf("branchURL doesn't match regexp: %v", parts)

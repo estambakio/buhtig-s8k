@@ -47,11 +47,11 @@ func DeleteRelease(name string, client *kubernetes.Clientset, config *rest.Confi
 		}
 
 		settings.TillerHost = fmt.Sprintf("127.0.0.1:%d", tillerTunnel.Local)
-		logger.Info(fmt.Sprintf("Created tunnel using local port: '%d'\n", tillerTunnel.Local))
+		logger.Debug(fmt.Sprintf("Created tunnel using local port: '%d'\n", tillerTunnel.Local))
 	}
 
 	// Set up the gRPC config.
-	logger.Info(fmt.Sprintf("SERVER: %q\n", settings.TillerHost))
+	logger.Debug(fmt.Sprintf("SERVER: %q\n", settings.TillerHost))
 
 	defer func() {
 		if tillerTunnel != nil {
@@ -67,7 +67,7 @@ func DeleteRelease(name string, client *kubernetes.Clientset, config *rest.Confi
 		return err
 	}
 
-	logger.Info("Check if release exists")
+	logger.Debug("Check if release exists")
 	if _, err := helmClient.ReleaseStatus(name); err != nil {
 		logger.Error(err)
 		return nil
@@ -80,7 +80,7 @@ func DeleteRelease(name string, client *kubernetes.Clientset, config *rest.Confi
 		return err
 	}
 
-	log.WithFields(log.Fields{"source": "helm"}).Info(resp.Info)
+	log.WithFields(log.Fields{"source": "helm"}).Debug(resp.Info)
 
 	return nil
 }
