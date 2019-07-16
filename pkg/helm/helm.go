@@ -27,7 +27,8 @@ var (
 	settings     environment.EnvSettings
 )
 
-// DeleteRelease deletes provided release
+// DeleteRelease deletes provided Helm release
+// we need to port-forward to get access to Tiller server. Port-forwarding logic is taken from helm lib.
 func DeleteRelease(name string, client *kubernetes.Clientset, config *rest.Config) error {
 	logger := log.WithFields(log.Fields{"helm-release": name, "func": "helm.DeleteRelease"})
 
@@ -61,8 +62,10 @@ func DeleteRelease(name string, client *kubernetes.Clientset, config *rest.Confi
 
 	options := []helm.Option{helm.Host(settings.TillerHost), helm.ConnectTimeout(settings.TillerConnectionTimeout)}
 
+	// create Helm client finally
 	helmClient := helm.NewClient(options...)
 
+	// fail quickly if tiller doesn't respond (maybe will provide more useful errors in this case)
 	if err := helmClient.PingTiller(); err != nil {
 		return err
 	}
@@ -80,6 +83,7 @@ func DeleteRelease(name string, client *kubernetes.Clientset, config *rest.Confi
 		return err
 	}
 
+	// log text response from delete request
 	log.WithFields(log.Fields{"source": "helm"}).Debug(resp.Info)
 
 	return nil

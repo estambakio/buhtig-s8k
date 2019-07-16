@@ -74,6 +74,9 @@ func main() {
 	}
 }
 
+// wrap type corev1.Namespace with our own name 'namespace' to enable custom methods
+// data-wise it'll be the same data, but provide possibility to use custom instance methods,
+// e.g. calculate github source url or helm release from namespace's annotations
 type namespace corev1.Namespace
 
 func (ns *namespace) Name() string {
@@ -101,10 +104,12 @@ func (ns *namespace) HelmRelease() (string, error) {
 	return helmRelease, nil
 }
 
+// implement Stringer type to enable usage of namespace type in string context (print to stdout, concat string, etc.)
 func (ns *namespace) String() string {
 	return ns.Name()
 }
 
+// struct to be sent as a pending request
 type pendingRequest struct {
 	ns   *namespace
 	done chan *namespace
@@ -112,6 +117,7 @@ type pendingRequest struct {
 
 // process is the main function designed to run infinitely
 func process(start chan struct{}, errReport chan<- error) {
+	// catch panic and send error to special channel instead of halting program
 	defer func() {
 		var err error
 		if r := recover(); r != nil {
@@ -130,6 +136,7 @@ func process(start chan struct{}, errReport chan<- error) {
 
 	for {
 		select {
+		// this blocks until 'start' channel receives a value
 		case <-start:
 			log.Info("Trigger received value -> Starting new iteration")
 
@@ -157,8 +164,8 @@ func process(start chan struct{}, errReport chan<- error) {
 			}
 
 			// make channel for pending requests which contain namespaces due to be processed
-			// it has a buffer equal to namespaces length which is needed for case if we need
-			// less workers than number of namespaces (e.g. for sequential processing we can use 1 worker)
+			// it has a buffer equal to namespaces length which gives ability to push all namespaces into
+			// pending channel before any consumer is created
 			pending := make(chan *pendingRequest, num)
 
 			// make channel for namespaces which completed workflow doesn't matter how exactly
@@ -178,6 +185,7 @@ func process(start chan struct{}, errReport chan<- error) {
 
 			waitFor := num
 
+			// this loop will exit when 'complete' channel is closed
 			for ns := range complete {
 				ns.logger().Debug("Namespace completed")
 				waitFor--
@@ -211,6 +219,8 @@ func worker(pending <-chan *pendingRequest) {
 		log.Debug(fmt.Sprintf("Worker exits"))
 	}()
 
+	// process all namespaces in parallel
+	// we can also limit number of parallel executions if needed, using other technics
 	for req := range pending {
 		go processNamespace(req.ns, req.done)
 	}
@@ -242,18 +252,22 @@ func processNamespace(ns *namespace, done chan<- *namespace) {
 		logger.Info(fmt.Sprintf("Received status %d for URL %s, do nothing", status, githubURL))
 		return
 	}
+
+	// it was 404, proceed
 	logger.Info(fmt.Sprintf("Received status %d for URL %s, call the Terminator!", status, githubURL))
 
+	// delete Helm release
 	if err := deleteHelmReleaseForNamespace(ns); err != nil {
 		logger.Error(err)
 		return
 	}
 
+	// if Helm release was successfully deleted then delete namespace
 	err = deleteNamespace(ns)
 	if err != nil {
 		logger.Error(err)
 	} else {
-		logger.Info("Namespace terminated successfully")
+		logger.Info("Termination succeeded")
 	}
 }
 
@@ -261,6 +275,7 @@ func processNamespace(ns *namespace, done chan<- *namespace) {
 func deleteNamespace(ns *namespace) error {
 	logger := ns.logger()
 
+	// use "k8s.io/client-go/util/retry" package to retry on conflicts
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		logger.Debug("Getting namespace")
 		k8sNs, err := k8sClient.CoreV1().Namespaces().Get(ns.Name(), metav1.GetOptions{})
@@ -292,6 +307,7 @@ func deleteNamespace(ns *namespace) error {
 func deleteHelmReleaseForNamespace(ns *namespace) error {
 	logger := ns.logger()
 
+	// use "k8s.io/client-go/util/retry" package to retry on conflicts
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		helmRelease, err := ns.HelmRelease()
 		if err != nil {
@@ -320,7 +336,7 @@ func getBranchURLStatus(branchURL string) (status int, err error) {
 		return 0, fmt.Errorf("branchURL doesn't match regexp: %v", parts)
 	}
 
-	// get auth token from env variable
+	// get Github auth token from env variable and inject it into http client
 	tokenSource := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: os.Getenv(ghTokenEnv)},
 	)
