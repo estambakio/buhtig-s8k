@@ -109,12 +109,6 @@ func (ns *namespace) String() string {
 	return ns.Name()
 }
 
-// struct to be sent as a pending request
-type pendingRequest struct {
-	ns   *namespace
-	done chan *namespace
-}
-
 // process is the main function designed to run infinitely
 func process(start chan struct{}, errReport chan<- error) {
 	// catch panic and send error to special channel instead of halting program
@@ -163,24 +157,13 @@ func process(start chan struct{}, errReport chan<- error) {
 				continue
 			}
 
-			// make channel for pending requests which contain namespaces due to be processed
-			// it has a buffer equal to namespaces length which gives ability to push all namespaces into
-			// pending channel before any consumer is created
-			pending := make(chan *pendingRequest, num)
-
 			// make channel for namespaces which completed workflow doesn't matter how exactly
 			complete := make(chan *namespace, num)
 
-			log.Debug("Spawn worker")
-			go worker(pending)
-
+			// process all namespaces in parallel
+			// we can also limit number of parallel executions if needed, using other technics
 			for _, ns := range namespaces {
-				req := &pendingRequest{
-					ns:   ns,
-					done: complete,
-				}
-				ns.logger().Debug("Pushing request to pending channel")
-				pending <- req
+				go processNamespace(ns, complete)
 			}
 
 			waitFor := num
@@ -190,8 +173,6 @@ func process(start chan struct{}, errReport chan<- error) {
 				ns.logger().Debug("Namespace completed")
 				waitFor--
 				if waitFor == 0 {
-					// workers will exit when 'pending' channel is closed
-					close(pending)
 					// this for loop ('range complete') will exit when 'complete' channel is closed
 					close(complete)
 
@@ -208,22 +189,6 @@ func reschedule(start chan<- struct{}) {
 	<-time.After(time.Minute)
 	log.Debug("Reschedule")
 	start <- struct{}{}
-}
-
-// worker reads from pending channel, and spawns process routine per namespace
-// it will exit when pending channel is closed
-func worker(pending <-chan *pendingRequest) {
-	log.Debug(fmt.Sprintf("Worker spawned"))
-
-	defer func() {
-		log.Debug(fmt.Sprintf("Worker exits"))
-	}()
-
-	// process all namespaces in parallel
-	// we can also limit number of parallel executions if needed, using other technics
-	for req := range pending {
-		go processNamespace(req.ns, req.done)
-	}
 }
 
 // processNamespace does a single run of our business logic for particular namespace
