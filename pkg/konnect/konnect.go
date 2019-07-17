@@ -47,12 +47,5 @@ func NewConfig() (*rest.Config, error) {
 
 // NewClient returns new K8s client for given config (optional)
 func NewClient(config *rest.Config) (client *kubernetes.Clientset, err error) {
-	if config == nil {
-		config, err = NewConfig()
-		if err != nil {
-			return nil, err
-		}
-	}
-	client, err = kubernetes.NewForConfig(config)
-	return client, err
+	return kubernetes.NewForConfig(config)
 }

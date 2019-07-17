@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -44,11 +45,13 @@ func init() {
 	// setup K8s client
 	var err error
 
+	// get k8s connection config
 	k8sConfig, err = konnect.NewConfig()
 	if err != nil {
 		panic(err)
 	}
 
+	// get k8s client for config
 	k8sClient, err = konnect.NewClient(k8sConfig)
 	if err != nil {
 		panic(err)
@@ -56,19 +59,68 @@ func init() {
 }
 
 func main() {
+	// set buffer of 1 to enable non-blocking send before any consumers are ready
 	start := make(chan struct{}, 1)
 	errReport := make(chan error, 1)
 
+	// trigger first iteration
+	start <- struct{}{}
+
 	for {
-		// spawn main routine
-		go process(start, errReport)
+		// main goroutine designed to run infinitely
+		// it can return only in case of panic inside it; outer loop will then start new iteration over again
+		go func() {
+			// catch panic and send error to special channel instead of halting program
+			defer func() {
+				var err error
+				if r := recover(); r != nil {
+					switch t := r.(type) {
+					case string:
+						err = errors.New(t)
+					case error:
+						err = t
+					default:
+						err = fmt.Errorf("%v", t)
+					}
+				}
+				// report exception to errReport channel
+				errReport <- err
+			}()
 
-		// start first iteration
-		start <- struct{}{}
+			for {
+				select {
+				// this blocks until 'start' channel receives a value
+				case <-start:
+					log.Info("Starting new iteration")
 
-		// block until 'process' throws exception
-		// and log returned error
-		// then start over again
+					// compose channels returned by function-per-step in direction inner-to-outer (https://en.wikipedia.org/wiki/Function_composition)
+					// all these functions have the same signature f(chan *namespace) -> chan *namespace
+					// therefore can be easily composed
+					// items in the resulting channel are those namespaces which completed all consequent steps in workflow
+					processed := filterNamespaceDeleted(
+						filterHelmReleaseDeletedIfNeeded(
+							filterWithDeletedBranches(
+								getNamespaces(),
+							),
+						),
+					)
+
+					// block until 'processed' channel is closed
+					for ns := range processed {
+						ns.logger().Debug("Namespace completed")
+					}
+
+					log.Debug("All namespaces completed, time to reschedule")
+					go func() {
+						log.Debug("Sleep")
+						<-time.After(time.Minute)
+						log.Debug("Reschedule")
+						start <- struct{}{}
+					}()
+				}
+			}
+		}()
+
 		err := <-errReport
 		log.Error(err)
 	}
@@ -109,187 +161,220 @@ func (ns *namespace) String() string {
 	return ns.Name()
 }
 
-// process is the main function designed to run infinitely
-func process(start chan struct{}, errReport chan<- error) {
-	// catch panic and send error to special channel instead of halting program
-	defer func() {
-		var err error
-		if r := recover(); r != nil {
-			switch t := r.(type) {
-			case string:
-				err = errors.New(t)
-			case error:
-				err = t
-			default:
-				err = fmt.Errorf("%v", t)
-			}
+// getNamespaces returns a channel which is populated by namespaces from Kubernetes API
+// which match our labelSelector. It incapsulates logic required for creating a list of
+// relevant namespaces.
+func getNamespaces() chan *namespace {
+	namespaces := make(chan *namespace)
+
+	// asynchronously get namespaces via Kubernetes API
+	// and coerce them to our custom 'namespace' type;
+	// then push to the channel
+	go func() {
+		// always close channel before return
+		// this signals to readers to stop listening
+		// in case of error it'll be closed empty channel
+		// in case of success it'll be channel populated by namespaces and closed when it's done
+		defer func() {
+			close(namespaces)
+		}()
+
+		log.Debug("Getting namespaces")
+
+		nsList, err := k8sClient.CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: labelSelector})
+		if err != nil {
+			log.Error("Failed to get namespaces")
+			log.Error(err)
+			return
 		}
-		// report exception to errReport channel
-		errReport <- err
-	}()
 
-	for {
-		select {
-		// this blocks until 'start' channel receives a value
-		case <-start:
-			log.Info("Trigger received value -> Starting new iteration")
+		num := len(nsList.Items)
 
-			log.Debug("Getting namespaces")
+		log.Info(fmt.Sprintf("Found %d relevant namespaces", num))
 
-			nsList, err := k8sClient.CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: labelSelector})
-			if err != nil {
-				panic(err)
-			}
-
-			var namespaces []*namespace
-
-			for _, ns := range nsList.Items {
+		for _, ns := range nsList.Items {
+			// get only those namespaces which are not in Terminating state currently
+			if ns.Status.Phase != corev1.NamespaceTerminating {
 				coercedNs := namespace(ns) // convert to our type to enable methods
-				namespaces = append(namespaces, &coercedNs)
-			}
-
-			num := len(namespaces)
-
-			log.Info(fmt.Sprintf("Found %d relevant namespaces", num))
-
-			if num == 0 {
-				go reschedule(start)
-				continue
-			}
-
-			// make channel for namespaces which completed workflow doesn't matter how exactly
-			complete := make(chan *namespace, num)
-
-			// process all namespaces in parallel
-			// we can also limit number of parallel executions if needed, using other technics
-			for _, ns := range namespaces {
-				go processNamespace(ns, complete)
-			}
-
-			waitFor := num
-
-			// this loop will exit when 'complete' channel is closed
-			for ns := range complete {
-				ns.logger().Debug("Namespace completed")
-				waitFor--
-				if waitFor == 0 {
-					// this for loop ('range complete') will exit when 'complete' channel is closed
-					close(complete)
-
-					log.Debug("All namespaces completed, time to reschedule")
-					go reschedule(start)
-				}
+				namespaces <- &coercedNs
 			}
 		}
-	}
-}
-
-func reschedule(start chan<- struct{}) {
-	log.Info("Sleep")
-	<-time.After(time.Minute)
-	log.Debug("Reschedule")
-	start <- struct{}{}
-}
-
-// processNamespace does a single run of our business logic for particular namespace
-func processNamespace(ns *namespace, done chan<- *namespace) {
-	// deferred function is called right before function returns
-	// we don't care what the outcome was, we just need to know when this run is finished
-	defer func() {
-		done <- ns
 	}()
 
-	logger := ns.logger()
-
-	githubURL, err := ns.GithubSourceURL()
-	if err != nil {
-		logger.Error(err)
-		return
-	}
-
-	// check Github Url
-	status, err := getBranchURLStatus(githubURL)
-	if err != nil {
-		logger.Error(err)
-		return
-	}
-	if status != 404 {
-		logger.Info(fmt.Sprintf("Received status %d for URL %s, do nothing", status, githubURL))
-		return
-	}
-
-	// it was 404, proceed
-	logger.Info(fmt.Sprintf("Received status %d for URL %s, call the Terminator!", status, githubURL))
-
-	// delete Helm release
-	if err := deleteHelmReleaseForNamespace(ns); err != nil {
-		logger.Error(err)
-		return
-	}
-
-	// if Helm release was successfully deleted then delete namespace
-	err = deleteNamespace(ns)
-	if err != nil {
-		logger.Error(err)
-	} else {
-		logger.Info("Termination succeeded")
-	}
+	// immediately return a channel; it'll be eventually populated by goroutine above
+	return namespaces
 }
 
-// deleteNamespace is a function which deletes provided namespace
-func deleteNamespace(ns *namespace) error {
-	logger := ns.logger()
+// filterWithDeletedBranches returns a channel of namespaces which have links to branches
+// which respond 404
+func filterWithDeletedBranches(namespaces chan *namespace) chan *namespace {
+	out := make(chan *namespace)
 
-	// use "k8s.io/client-go/util/retry" package to retry on conflicts
-	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		logger.Debug("Getting namespace")
-		k8sNs, err := k8sClient.CoreV1().Namespaces().Get(ns.Name(), metav1.GetOptions{})
+	go func() {
+		defer func() {
+			close(out)
+		}()
 
-		if err != nil {
-			logger.Error(err)
-			return nil // namespace not found, nothing to delete
+		var wg sync.WaitGroup
+
+		for ns := range namespaces {
+			// increment counter for WaitGroup
+			wg.Add(1)
+			// spawn goroutine for each namespace
+			go func(ns *namespace) {
+				defer func() {
+					wg.Done() // decrement WaitGroup counter when function returns
+				}()
+
+				logger := ns.logger()
+
+				logger.Debug("Checking branch")
+
+				githubURL, err := ns.GithubSourceURL()
+				if err != nil {
+					logger.Error(err)
+					return
+				}
+
+				// check Github Url
+				status, err := getBranchURLStatus(githubURL)
+				if err != nil {
+					logger.Error(err)
+					return
+				}
+				if status != 404 {
+					logger.Info(fmt.Sprintf("Received status %d for URL %s, do nothing", status, githubURL))
+					return
+				}
+
+				// it was 404, proceed
+				logger.Info(fmt.Sprintf("Received status %d for URL %s, call the Terminator!", status, githubURL))
+				out <- ns
+			}(ns)
 		}
 
-		if k8sNs.Status.Phase == corev1.NamespaceTerminating {
-			logger.Warn("Namespace is in terminanting state, bailing out...")
-			return nil
-		}
+		wg.Wait() // wait until WaitGroup counter equals zero
+	}()
 
-		logger.Info("Trying to delete namespace")
-		err = k8sClient.CoreV1().Namespaces().Delete(ns.Name(), &metav1.DeleteOptions{})
-		if err != nil {
-			logger.Error(err)
-			return err
-		}
-		logger.Info("Successfully deleted namespace")
-		return nil
-	})
-
-	return retryErr
+	return out
 }
 
-// deleteHelmReleaseForNamespace is a function which deletes Helm release associated with this namespace
-func deleteHelmReleaseForNamespace(ns *namespace) error {
-	logger := ns.logger()
+func filterHelmReleaseDeletedIfNeeded(namespaces chan *namespace) chan *namespace {
+	out := make(chan *namespace)
 
-	// use "k8s.io/client-go/util/retry" package to retry on conflicts
-	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		helmRelease, err := ns.HelmRelease()
-		if err != nil {
-			return err
+	go func() {
+		defer func() {
+			close(out)
+		}()
+
+		var wg sync.WaitGroup
+
+		for ns := range namespaces {
+			// increment counter for WaitGroup
+			wg.Add(1)
+			// spawn goroutine for each namespace
+			go func(ns *namespace) {
+				defer func() {
+					wg.Done() // decrement WaitGroup counter when function returns
+				}()
+
+				logger := ns.logger()
+
+				logger.Debug("Deleting Helm release")
+
+				retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+					helmRelease, err := ns.HelmRelease()
+					if err != nil {
+						logger.Error(err)
+						return nil // exit if there's no helm release defined for this namespace
+					}
+
+					logger.Info("Trying to delete Helm release")
+					err = helm.DeleteRelease(helmRelease, k8sClient, k8sConfig)
+					if err != nil {
+						logger.Error(err)
+						return err
+					}
+					logger.Info("Successfully deleted helm release")
+					return nil
+				})
+
+				if retryErr != nil {
+					logger.Error(retryErr)
+					return
+				}
+
+				out <- ns
+			}(ns)
 		}
 
-		logger.Info("Trying to delete Helm release")
-		err = helm.DeleteRelease(helmRelease, k8sClient, k8sConfig)
-		if err != nil {
-			logger.Error(err)
-			return err
-		}
-		logger.Info("Successfully deleted helm release")
-		return nil
-	})
+		wg.Wait() // wait until WaitGroup counter equals zero
+	}()
 
-	return retryErr
+	return out
+}
+
+func filterNamespaceDeleted(namespaces chan *namespace) chan *namespace {
+	out := make(chan *namespace)
+
+	go func() {
+		defer func() {
+			close(out)
+		}()
+
+		var wg sync.WaitGroup
+
+		for ns := range namespaces {
+			// increment counter for WaitGroup
+			wg.Add(1)
+			// spawn goroutine for each namespace
+			go func(ns *namespace) {
+				defer func() {
+					wg.Done() // decrement WaitGroup counter when function returns
+				}()
+
+				logger := ns.logger()
+
+				logger.Debug("Deleting namespace")
+
+				// use "k8s.io/client-go/util/retry" package to retry on conflicts
+				retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+					logger.Debug("Getting namespace")
+					k8sNs, err := k8sClient.CoreV1().Namespaces().Get(ns.Name(), metav1.GetOptions{})
+
+					if err != nil {
+						logger.Error(err)
+						return nil // namespace not found, nothing to delete
+					}
+
+					if k8sNs.Status.Phase == corev1.NamespaceTerminating {
+						logger.Warn("Namespace is in terminanting state, bailing out...")
+						return nil
+					}
+
+					logger.Debug("Trying to delete namespace")
+					err = k8sClient.CoreV1().Namespaces().Delete(ns.Name(), &metav1.DeleteOptions{})
+					if err != nil {
+						logger.Error(err)
+						return err
+					}
+					logger.Info("Successfully deleted namespace")
+					return nil
+				})
+
+				if retryErr != nil {
+					logger.Error(retryErr)
+					return
+				}
+
+				out <- ns
+			}(ns)
+		}
+
+		wg.Wait() // wait until WaitGroup counter equals zero
+	}()
+
+	return out
 }
 
 // getBranchURLStatus expects URL like https://github.com/USER/REPO/tree/BRANCH
