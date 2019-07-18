@@ -13,7 +13,7 @@ publish-cd-image: docker-login ## Publish CI Docker image
 	./build/docker/cd/push.sh
 
 .PHONY: test
-test: ## Build binary
+test: ## Run tests 
 	go test -cover ./...
 
 .PHONY: build
