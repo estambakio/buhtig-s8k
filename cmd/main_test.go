@@ -45,7 +45,7 @@ func TestNamespace_HelmRelease(t *testing.T) {
 		helmRelease := "dev-" + name
 		k8sNs := corev1.Namespace{}
 
-		ns := namespace(k8sNs)
+		ns := castK8sNsToNamespaceType(k8sNs)
 
 		if val, err := ns.HelmRelease(); err == nil {
 			t.Errorf("Shoud've failed for empty value but returned %v", val)
@@ -72,13 +72,13 @@ func TestNamespace_String(t *testing.T) {
 func TestNsList_filter(t *testing.T) {
 	var namespaces []*namespace
 	for _, name := range []string{"One", "Two", "Three"} {
-		k8sNs := corev1.Namespace{}
-		k8sNs.ObjectMeta.Name = name
-		ns := namespace(k8sNs)
-		namespaces = append(namespaces, &ns)
+		k8sNs := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		namespaces = append(namespaces, castK8sNsToNamespaceType((k8sNs)))
 	}
 
 	nsC := make(nsChan)
+
+	// filter by names which start with "T"
 	resultC := nsC.filter(func(ns *namespace) bool {
 		return strings.HasPrefix(ns.Name(), "T")
 	})
@@ -101,18 +101,33 @@ func TestNsList_filter(t *testing.T) {
 	}
 }
 
+// addK8sNs is a helper function which populates fake k8s client with namespaces
+func addK8sNs(client *fake.Clientset, names []string, addLabel bool) (err error) {
+	for _, name := range names {
+		meta := metav1.ObjectMeta{}
+		meta.Name = name
+		if addLabel {
+			meta.Labels = map[string]string{
+				strings.Split(labelSelector, "=")[0]: strings.Split(labelSelector, "=")[1],
+			}
+		}
+		ns := &corev1.Namespace{ObjectMeta: meta}
+		_, err := client.CoreV1().Namespaces().Create(ns)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func TestGetNamespaces(t *testing.T) {
 	k8sClient := fake.NewSimpleClientset()
 
-	namesWithoutLabel := []string{"One", "Two", "Three"}
-
 	// create k8s namespaces without required label
-	for _, name := range namesWithoutLabel {
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
-		_, err := k8sClient.CoreV1().Namespaces().Create(ns)
-		if err != nil {
-			t.Error(err)
-		}
+	namesWithoutLabel := []string{"One", "Two", "Three"}
+	err := addK8sNs(k8sClient, namesWithoutLabel, false)
+	if err != nil {
+		t.Error(err)
 	}
 
 	// if there're no namespaces with required label then channel should be empty
@@ -127,22 +142,11 @@ func TestGetNamespaces(t *testing.T) {
 		t.Errorf("Expected empty channel, but got %d elements", i)
 	}
 
-	namesWithLabel := []string{"Four", "Five", "Six"}
-
 	// create k8s namespaces with required label
-	for _, name := range namesWithLabel {
-		ns := &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: name,
-				Labels: map[string]string{
-					strings.Split(labelSelector, "=")[0]: strings.Split(labelSelector, "=")[1],
-				},
-			},
-		}
-		_, err := k8sClient.CoreV1().Namespaces().Create(ns)
-		if err != nil {
-			t.Error(err)
-		}
+	namesWithLabel := []string{"Four", "Five", "Six"}
+	err = addK8sNs(k8sClient, namesWithLabel, true)
+	if err != nil {
+		t.Error(err)
 	}
 
 	// if there're namespaces with required label then channel should include all these namespaces
@@ -158,5 +162,44 @@ func TestGetNamespaces(t *testing.T) {
 
 	if i != len(namesWithLabel) {
 		t.Errorf("Expected i == %d, but got %v", len(namesWithLabel), i)
+	}
+}
+
+func TestIsNamespaceDeleted(t *testing.T) {
+	k8sClient := fake.NewSimpleClientset()
+
+	// create k8s namespaces
+	names := []string{"One", "Two", "Three"}
+	err := addK8sNs(k8sClient, names, false)
+	if err != nil {
+		t.Error(err)
+	}
+
+	k8sNs, err := k8sClient.CoreV1().Namespaces().Get(names[1], metav1.GetOptions{})
+
+	// should delete namespace and return true
+	ok := isNamespaceDeleted(k8sClient)(castK8sNsToNamespaceType(*k8sNs))
+
+	nsList, err := k8sClient.CoreV1().Namespaces().List(metav1.ListOptions{})
+	if err != nil {
+		t.Error(err)
+	}
+
+	if len(nsList.Items) != (len(names) - 1) {
+		t.Errorf("Failed to delete ns %s", names[1])
+	}
+
+	if !ok {
+		t.Errorf("Expected %v for deleted namespace, but got %v", true, ok)
+	}
+
+	// try to delete non existing namespace
+	nonExNs := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "IDontExist"}}
+
+	// should return true because this namespace doesn't exist
+	ok = isNamespaceDeleted(k8sClient)(castK8sNsToNamespaceType(nonExNs))
+
+	if !ok {
+		t.Errorf("Expected %v for not existing namespace, but got %v", true, ok)
 	}
 }

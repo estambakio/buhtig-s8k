@@ -102,7 +102,7 @@ func main() {
 						filter(isHelmReleaseDeletedIfNeeded(k8sClient, k8sConfig)).
 						filter(isNamespaceDeleted(k8sClient))
 
-					// this loop blocks until 'processed' channel is closed
+					// this loop blocks until 'terminated' channel is closed
 					for ns := range terminated {
 						ns.logger().Debug("Completely terminated")
 					}
@@ -126,7 +126,14 @@ func main() {
 // wrap type corev1.Namespace with our own name 'namespace' to enable custom methods
 // data-wise it'll be the same data, but provide possibility to use custom instance methods,
 // e.g. calculate github source url or helm release from namespace's annotations
+// TODO: find out if there's better, more obvious way to do such things
 type namespace corev1.Namespace
+
+// convert K8s namespace to our 'namespace' type
+func castK8sNsToNamespaceType(ns corev1.Namespace) *namespace {
+	coercedNs := namespace(ns)
+	return &coercedNs
+}
 
 func (ns *namespace) Name() string {
 	return ns.ObjectMeta.Name
@@ -241,8 +248,7 @@ func getNamespaces(k8sClient kubernetes.Interface) nsChan {
 		for _, ns := range nsList.Items {
 			// get only those namespaces which are not in Terminating state currently
 			if ns.Status.Phase != corev1.NamespaceTerminating {
-				coercedNs := namespace(ns) // convert to our type to enable methods
-				namespaces <- &coercedNs
+				namespaces <- castK8sNsToNamespaceType(ns)
 			}
 		}
 	}()
@@ -310,6 +316,8 @@ func isHelmReleaseDeletedIfNeeded(k8sClient kubernetes.Interface, k8sConfig *res
 	}
 }
 
+// isNamespaceDeleted deletes namespace from Kubernetes if it exists
+// returns false if namespace deletion fails, true otherwise
 func isNamespaceDeleted(k8sClient kubernetes.Interface) func(*namespace) bool {
 	return func(ns *namespace) bool {
 		logger := ns.logger()
