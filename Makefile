@@ -17,11 +17,11 @@ test: ## Build binary
 	go test -cover ./...
 
 .PHONY: build
-build: ## Build binary
+build: test ## Build binary
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./dist/app ./cmd
 
 .PHONY: run
-run: ## Go run
+run: test ## Go run
 	APP_ENV=outside_cluster go run ./cmd
 
 .PHONY: build-app-image

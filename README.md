@@ -16,7 +16,7 @@ It runs as a single service in its own namespace and handles this task in Kubern
 
 ### How to track namespace
 
-App uses `labels` and `annotations` to define relevant namespaces. 
+App uses `labels` and `annotations` to define relevant namespaces.
 
 Namespace should have:
 - `label` with name `opuscapita.com/buhtig-s8k` and value `"true"`
@@ -41,6 +41,10 @@ If branch `issue-34` is deleted from repository `OpusCapita/some-repo` then appl
 - delete Helm release `dev-some-repo-issue-34`
   (in the same fashion as `helm delete --purge dev-some-repo-issue-34`)
 - delete namespace `dev-some-repo-issue-34`
+
+### Testing
+
+`make test`
 
 ### Running
 
