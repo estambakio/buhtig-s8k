@@ -2,6 +2,7 @@ FROM golang:1.12 as app
 
 WORKDIR /app
 COPY / ./
+RUN make test
 RUN make build
 
 FROM alpine

@@ -29,7 +29,7 @@ var (
 
 // DeleteRelease deletes provided Helm release
 // we need to port-forward to get access to Tiller server. Port-forwarding logic is taken from helm lib.
-func DeleteRelease(name string, client *kubernetes.Clientset, config *rest.Config) error {
+func DeleteRelease(name string, client kubernetes.Interface, config *rest.Config) error {
 	logger := log.WithFields(log.Fields{"helm-release": name, "func": "helm.DeleteRelease"})
 
 	if tns, ok := os.LookupEnv(tillerNamespaceEnv); ok {

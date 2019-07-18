@@ -30,21 +30,18 @@ const (
 	helmReleaseAnnotationName = "opuscapita.com/helm-release"
 
 	ghTokenEnv = "GH_TOKEN"
-
-	k8sAPITimeout = 20 // seconds
 )
 
 var k8sConfig *rest.Config
 var k8sClient *kubernetes.Clientset
 
-func init() {
+func main() {
 	log.SetLevel(log.DebugLevel)
 	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
 
 	// assert if required env variables are defined
 	assertEnv(ghTokenEnv)
 
-	// setup K8s client
 	var err error
 
 	// get k8s connection config
@@ -58,9 +55,7 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
-}
 
-func main() {
 	// set buffer of 1 to enable non-blocking send before any consumers are ready
 	start := make(chan struct{}, 1)
 	errReport := make(chan error, 1)
@@ -102,10 +97,10 @@ func main() {
 					// therefore all namespaces are processed concurrently
 					// items in the resulting channel are those namespaces which completed all consequent steps in workflow
 					// (e.g. returned 'true' for all predicates one after another)
-					terminated := getNamespaces().
+					terminated := getNamespaces(k8sClient).
 						filter(isBranchDeleted).
-						filter(isHelmReleaseDeletedIfNeeded).
-						filter(isNamespaceDeleted)
+						filter(isHelmReleaseDeletedIfNeeded(k8sClient, k8sConfig)).
+						filter(isNamespaceDeleted(k8sClient))
 
 					// this loop blocks until 'processed' channel is closed
 					for ns := range terminated {
@@ -210,7 +205,7 @@ func (in nsChan) filter(predicate func(*namespace) bool) nsChan {
 // getNamespaces returns a channel which is populated by namespaces from Kubernetes API
 // which match our labelSelector. It incapsulates logic required for creating a list of
 // relevant namespaces.
-func getNamespaces() nsChan {
+func getNamespaces(k8sClient kubernetes.Interface) nsChan {
 	namespaces := make(nsChan)
 
 	// asynchronously get namespaces via Kubernetes API
@@ -227,7 +222,7 @@ func getNamespaces() nsChan {
 
 		log.Debug("Getting namespaces")
 
-		timeout := int64(k8sAPITimeout)
+		timeout := int64(20) // seconds
 		listOptions := metav1.ListOptions{
 			LabelSelector:  labelSelector,
 			TimeoutSeconds: &timeout,
@@ -283,72 +278,76 @@ func isBranchDeleted(ns *namespace) bool {
 	return true
 }
 
-func isHelmReleaseDeletedIfNeeded(ns *namespace) bool {
-	logger := ns.logger()
+func isHelmReleaseDeletedIfNeeded(k8sClient kubernetes.Interface, k8sConfig *rest.Config) func(*namespace) bool {
+	return func(ns *namespace) bool {
+		logger := ns.logger()
 
-	logger.Debug("Deleting Helm release")
+		logger.Debug("Deleting Helm release")
 
-	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		helmRelease, err := ns.HelmRelease()
-		if err != nil {
-			logger.Error(err)
-			return nil // exit if there's no helm release defined for this namespace
+		retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			helmRelease, err := ns.HelmRelease()
+			if err != nil {
+				logger.Error(err)
+				return nil // exit if there's no helm release defined for this namespace
+			}
+
+			logger.Info("Trying to delete Helm release")
+			err = helm.DeleteRelease(helmRelease, k8sClient, k8sConfig)
+			if err != nil {
+				logger.Error(err)
+				return err
+			}
+			logger.Info("Successfully deleted helm release")
+			return nil
+		})
+
+		if retryErr != nil {
+			logger.Error(retryErr)
+			return false
 		}
 
-		logger.Info("Trying to delete Helm release")
-		err = helm.DeleteRelease(helmRelease, k8sClient, k8sConfig)
-		if err != nil {
-			logger.Error(err)
-			return err
-		}
-		logger.Info("Successfully deleted helm release")
-		return nil
-	})
-
-	if retryErr != nil {
-		logger.Error(retryErr)
-		return false
+		return true
 	}
-
-	return true
 }
 
-func isNamespaceDeleted(ns *namespace) bool {
-	logger := ns.logger()
+func isNamespaceDeleted(k8sClient kubernetes.Interface) func(*namespace) bool {
+	return func(ns *namespace) bool {
+		logger := ns.logger()
 
-	logger.Debug("Deleting namespace")
+		logger.Debug("Deleting namespace")
 
-	// use "k8s.io/client-go/util/retry" package to retry on conflicts
-	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		logger.Debug("Getting namespace")
-		k8sNs, err := k8sClient.CoreV1().Namespaces().Get(ns.Name(), metav1.GetOptions{})
+		// use "k8s.io/client-go/util/retry" package to retry on conflicts
+		retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			logger.Debug("Getting namespace")
+			k8sNs, err := k8sClient.CoreV1().Namespaces().Get(ns.Name(), metav1.GetOptions{})
 
-		if err != nil {
-			logger.Error(err)
-			return nil // namespace not found, nothing to delete
-		}
+			if err != nil {
+				logger.Error(err)
+				return nil // namespace not found, nothing to delete
+			}
 
-		if k8sNs.Status.Phase == corev1.NamespaceTerminating {
-			logger.Warn("Namespace is in terminanting state, bailing out...")
+			if k8sNs.Status.Phase == corev1.NamespaceTerminating {
+				logger.Warn("Namespace is in terminanting state, bailing out...")
+				return nil
+			}
+
+			logger.Debug("Trying to delete namespace")
+			err = k8sClient.CoreV1().Namespaces().Delete(ns.Name(), &metav1.DeleteOptions{})
+			if err != nil {
+				logger.Error(err)
+				return err
+			}
+			logger.Info("Successfully deleted namespace")
 			return nil
+		})
+
+		if retryErr != nil {
+			logger.Error(retryErr)
+			return false
 		}
 
-		logger.Debug("Trying to delete namespace")
-		err = k8sClient.CoreV1().Namespaces().Delete(ns.Name(), &metav1.DeleteOptions{})
-		if err != nil {
-			logger.Error(err)
-			return err
-		}
-		logger.Info("Successfully deleted namespace")
-		return nil
-	})
-
-	if retryErr != nil {
-		logger.Error(retryErr)
-		return false
+		return true
 	}
-
-	return true
 }
 
 // getBranchURLStatus expects URL like https://github.com/USER/REPO/tree/BRANCH
