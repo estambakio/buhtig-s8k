@@ -129,9 +129,9 @@ func main() {
 // TODO: find out if there's better, more obvious way to do such things
 type namespace corev1.Namespace
 
-// convert K8s namespace to our 'namespace' type
-func castK8sNsToNamespaceType(ns corev1.Namespace) *namespace {
-	coercedNs := namespace(ns)
+// newNamespace converts K8s namespace to our 'namespace' type
+func newNamespace(k8sNs corev1.Namespace) *namespace {
+	coercedNs := namespace(k8sNs)
 	return &coercedNs
 }
 
@@ -248,7 +248,7 @@ func getNamespaces(k8sClient kubernetes.Interface) nsChan {
 		for _, ns := range nsList.Items {
 			// get only those namespaces which are not in Terminating state currently
 			if ns.Status.Phase != corev1.NamespaceTerminating {
-				namespaces <- castK8sNsToNamespaceType(ns)
+				namespaces <- newNamespace(ns)
 			}
 		}
 	}()

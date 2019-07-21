@@ -45,7 +45,7 @@ func TestNamespace_HelmRelease(t *testing.T) {
 		helmRelease := "dev-" + name
 		k8sNs := corev1.Namespace{}
 
-		ns := castK8sNsToNamespaceType(k8sNs)
+		ns := newNamespace(k8sNs)
 
 		if val, err := ns.HelmRelease(); err == nil {
 			t.Errorf("Shoud've failed for empty value but returned %v", val)
@@ -69,11 +69,11 @@ func TestNamespace_String(t *testing.T) {
 	}
 }
 
-func TestNsList_filter(t *testing.T) {
+func TestNsChan_filter(t *testing.T) {
 	var namespaces []*namespace
 	for _, name := range []string{"One", "Two", "Three"} {
 		k8sNs := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
-		namespaces = append(namespaces, castK8sNsToNamespaceType((k8sNs)))
+		namespaces = append(namespaces, newNamespace((k8sNs)))
 	}
 
 	nsC := make(nsChan)
@@ -178,7 +178,7 @@ func TestIsNamespaceDeleted(t *testing.T) {
 	k8sNs, err := k8sClient.CoreV1().Namespaces().Get(names[1], metav1.GetOptions{})
 
 	// should delete namespace and return true
-	ok := isNamespaceDeleted(k8sClient)(castK8sNsToNamespaceType(*k8sNs))
+	ok := isNamespaceDeleted(k8sClient)(newNamespace(*k8sNs))
 
 	nsList, err := k8sClient.CoreV1().Namespaces().List(metav1.ListOptions{})
 	if err != nil {
@@ -197,7 +197,7 @@ func TestIsNamespaceDeleted(t *testing.T) {
 	nonExNs := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "IDontExist"}}
 
 	// should return true because this namespace doesn't exist
-	ok = isNamespaceDeleted(k8sClient)(castK8sNsToNamespaceType(nonExNs))
+	ok = isNamespaceDeleted(k8sClient)(newNamespace(nonExNs))
 
 	if !ok {
 		t.Errorf("Expected %v for not existing namespace, but got %v", true, ok)
