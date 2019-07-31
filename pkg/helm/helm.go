@@ -8,6 +8,7 @@ import (
 	"k8s.io/helm/pkg/helm/environment"
 	"k8s.io/helm/pkg/helm/portforwarder"
 	"k8s.io/helm/pkg/kube"
+	"k8s.io/helm/pkg/proto/hapi/release"
 
 	log "github.com/sirupsen/logrus"
 
@@ -71,8 +72,14 @@ func DeleteRelease(name string, client kubernetes.Interface, config *rest.Config
 	}
 
 	logger.Debug("Check if release exists")
-	if _, err := helmClient.ReleaseStatus(name); err != nil {
+	rs, err := helmClient.ReleaseStatus(name)
+	if err != nil {
 		logger.Error(err)
+		return nil
+	}
+	statusCode := rs.GetInfo().GetStatus().GetCode()
+	if statusCode == release.Status_DELETED || statusCode == release.Status_DELETING {
+		logger.Debug(fmt.Sprintf("Helm release status = %v, skip trying to delete", statusCode))
 		return nil
 	}
 

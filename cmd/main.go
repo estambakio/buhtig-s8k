@@ -361,7 +361,7 @@ func isNamespaceDeleted(k8sClient kubernetes.Interface) func(*namespace) bool {
 // getBranchURLStatus expects URL like https://github.com/USER/REPO/tree/BRANCH
 // it queries Github API and returns status code of HTTP response
 func getBranchURLStatus(branchURL string) (status int, err error) {
-	ghBranchURLRe := regexp.MustCompile("https://github.com/([^/]+)/([^/]+)/tree/([^/]+)")
+	ghBranchURLRe := regexp.MustCompile("https://github.com/([^/]+)/([^/]+)/tree/(.+)")
 	parts := ghBranchURLRe.FindStringSubmatch(branchURL)
 	if parts == nil || len(parts) < 4 {
 		return 0, fmt.Errorf("branchURL doesn't match regexp: %v", parts)
