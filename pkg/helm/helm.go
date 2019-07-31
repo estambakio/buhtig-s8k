@@ -77,7 +77,7 @@ func DeleteRelease(name string, client kubernetes.Interface, config *rest.Config
 	}
 
 	logger.Info("Deleting Helm release")
-	resp, err := helmClient.DeleteRelease(name, helm.DeletePurge(true), helm.DeleteTimeout(10))
+	resp, err := helmClient.DeleteRelease(name, helm.DeletePurge(true), helm.DeleteTimeout(60))
 	if err != nil {
 		logger.Error(err)
 		return err
