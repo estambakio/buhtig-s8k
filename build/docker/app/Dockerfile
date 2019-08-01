@@ -2,6 +2,10 @@ FROM golang:1.12 as app
 
 WORKDIR /app
 COPY / ./
+
+# should lead to faster module downloads
+ENV GOPROXY https://proxy.golang.org
+
 RUN make build
 
 FROM alpine

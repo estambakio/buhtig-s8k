@@ -78,14 +78,14 @@ func DeleteRelease(name string, client kubernetes.Interface, config *rest.Config
 		return nil
 	}
 	statusCode := rs.GetInfo().GetStatus().GetCode()
-	log.Debug(fmt.Sprintf("Release status: %d", statusCode))
+	logger.Debug(fmt.Sprintf("Release status: %d", statusCode))
 	if statusCode == release.Status_DELETED || statusCode == release.Status_DELETING {
 		logger.Debug(fmt.Sprintf("Helm release status = %v, skip trying to delete", statusCode))
 		return nil
 	}
 
 	logger.Info("Deleting Helm release")
-	resp, err := helmClient.DeleteRelease(name, helm.DeletePurge(true) /*, helm.DeleteTimeout(60)*/)
+	resp, err := helmClient.DeleteRelease(name, helm.DeletePurge(true))
 	if err != nil {
 		logger.Error(err)
 		return err
