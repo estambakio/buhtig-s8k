@@ -23,15 +23,15 @@ const (
 	tillerNamespaceEnv = "TILLER_NAMESPACE"
 )
 
-var (
-	tillerTunnel *kube.Tunnel
-	settings     environment.EnvSettings
-)
-
 // DeleteRelease deletes provided Helm release
 // we need to port-forward to get access to Tiller server. Port-forwarding logic is taken from helm lib.
 func DeleteRelease(name string, client kubernetes.Interface, config *rest.Config) error {
 	logger := log.WithFields(log.Fields{"helm-release": name, "func": "helm.DeleteRelease"})
+
+	var (
+		tillerTunnel *kube.Tunnel
+		settings     environment.EnvSettings
+	)
 
 	if tns, ok := os.LookupEnv(tillerNamespaceEnv); ok {
 		settings.TillerNamespace = tns
@@ -57,6 +57,7 @@ func DeleteRelease(name string, client kubernetes.Interface, config *rest.Config
 
 	defer func() {
 		if tillerTunnel != nil {
+			logger.Debug("Closing tunnel to Tiller")
 			tillerTunnel.Close()
 		}
 	}()
