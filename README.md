@@ -1,5 +1,6 @@
 [![CircleCI](https://circleci.com/gh/OpusCapita/buhtig-s8k.svg?style=shield)](https://circleci.com/gh/OpusCapita/buhtig-s8k)
 [![Go Report Card](https://goreportcard.com/badge/github.com/OpusCapita/buhtig-s8k)](https://goreportcard.com/report/github.com/OpusCapita/buhtig-s8k)
+[![license](https://img.shields.io/github/license/OpusCapita/buhtig-s8k.svg?style=flat-square)](LICENSE)
 
 # buhtig-s8k
 
