@@ -4,9 +4,13 @@
 
 # buhtig-s8k
 
-Reflect some Github events in Kubernetes cluster
+Out GitOps flow:
+- for every feature/fix **branch is created** in a respective repository
+- if repository is an application then after every commit it's built and **deployed into Kubernetes** cluster into its own namespace (named like `dev-<repo>-<branch>`) and usually using Helm release (named just like namespace)
+- when development is done and changes are merged to stable branch, **development branch is deleted**
+- now **we need to remove obsolete stuff** from cluster - this is a job for **buhtig-s8k!**
 
-This app deletes namespace and corresponding Helm release for development branch on Github in case this branch was deleted (e.g. merged and deleted as obsolete).
+Buhtig-s8k runs inside cluster and deletes namespace and corresponding Helm release for development branch on Github in case this branch was deleted (e.g. merged and deleted as obsolete).
 
 ## Why is it needed
 
