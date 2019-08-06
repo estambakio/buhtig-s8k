@@ -1,3 +1,6 @@
+[![CircleCI](https://circleci.com/gh/OpusCapita/buhtig-s8k.svg?style=svg)](https://circleci.com/gh/OpusCapita/buhtig-s8k)
+
+
 # buhtig-s8k
 
 Reflect some Github events in Kubernetes cluster
