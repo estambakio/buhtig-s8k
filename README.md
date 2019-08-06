@@ -14,7 +14,7 @@ Buhtig-s8k runs inside cluster and deletes namespace and corresponding Helm rele
 
 ## Why is it needed
 
-When a development branch is created in application's Github repository corresponding deployment is created in Azure cluster. When development completes a pull request is created, and when it is merged the branch becomes obsolete (because it's already merged to main branch) and should be deleted either via Github UI or `git push --delete origin DEV_BRANCH_NAME`. Deployment becomes obsolete and should be deleted in order to release cluster resources.
+When a development branch is created in application's Github repository corresponding deployment is created in Kubernetes cluster. When development completes a pull request is created, and when it is merged the branch becomes obsolete (because it's already merged to main branch) and should be deleted either via Github UI or `git push --delete origin DEV_BRANCH_NAME`. Deployment becomes obsolete and should be deleted in order to release cluster resources.
 
 ## How it works
 
